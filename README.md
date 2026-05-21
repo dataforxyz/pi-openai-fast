@@ -10,8 +10,28 @@ pi install git:github.com/studioarray/pi-openai-fast
 
 ## Commands and CLI flags
 
-- `/fast` toggles the desired Fast Mode state. With persistence enabled it writes `desiredActive`; with persistence disabled it is session-only. If the current model is unsupported or absent, the desired state stays true but Fast Mode remains inactive until an allow-listed model is selected.
-- `--fast` starts one run with desired Fast Mode enabled and never writes config.
+- `/fast` toggles the **Desired Fast State** for the current Pi process. With `persistState: true` it also writes `desiredActive`; with `persistState: false` it is session-only and does not write config.
+- Every accepted `/fast` toggle mirrors the new **Desired Fast State** into the **Fast Desired Handoff** environment value, `PI_OPENAI_FAST_DESIRED=1` or `PI_OPENAI_FAST_DESIRED=0`, so same-process session replacements such as `/new` and newly spawned descendant Pi processes can see the current intent.
+- If a persistent save fails, the current process still keeps the latest **Desired Fast State** and handoff value, but warns that the preference was not saved.
+- `--fast` starts one run with **Desired Fast State** enabled and seeds `PI_OPENAI_FAST_DESIRED=1` for descendants of that run. The startup flag itself never writes or persists the Fast preference (`desiredActive`), though normal config loading may still create default config when no config files exist.
+
+## Fast state, handoff, and process boundaries
+
+**Desired Fast State** is the user's intent: Fast Mode requested on or off. **Active Fast State** is the runtime result: desired-on plus the current model being a **Supported Model**. Provider requests receive `service_tier: "priority"`, and footer/status feedback shows `fast`, only while **Active Fast State** is true.
+
+If Fast Mode is desired but the selected model is absent or unsupported, the desired state is preserved but Fast Mode remains inactive until a supported model is selected. Each Pi process checks its own selected model against its own `supportedModels` list before becoming active.
+
+Startup resolves desired state in this order:
+
+1. `--fast` wins and starts desired-on.
+2. Exact `PI_OPENAI_FAST_DESIRED=1` or `PI_OPENAI_FAST_DESIRED=0` wins over config-derived behavior.
+3. Config-derived behavior applies last: `desiredActive` is used only when `persistState` is `true`; otherwise startup defaults to desired-off.
+
+Invalid handoff values are warned about, ignored, and treated as if no handoff value was present, so normal config-derived behavior can still apply.
+
+The **Fast Desired Handoff** is a general environment handoff for descendant Pi processes; it is not subagents-specific. It is inherited only by processes that start after the value is set. Already-running child or descendant processes do not update retroactively after a parent toggles `/fast`, and a child process that does not load `pi-openai-fast` cannot apply this extension's behavior.
+
+A session-only `/fast` toggle survives same-process replacements and descendants through `PI_OPENAI_FAST_DESIRED`, but it disappears on normal Pi process exit unless either `persistState: true` saved `desiredActive` or the next Pi process inherits a `PI_OPENAI_FAST_DESIRED` value from its parent environment.
 
 ## Default supported models
 
@@ -28,7 +48,7 @@ Fast Mode activates only when the current model matches one of these default ent
 
 ## Config
 
-Extension config is read from `~/.pi/agent/extensions/pi-openai-fast.json` and `.pi/extensions/pi-openai-fast.json`.
+Extension config is read from `~/.pi/agent/extensions/pi-openai-fast.json` and `.pi/extensions/pi-openai-fast.json`. Project config overrides global config for known fields.
 
 By default, `/fast` is session-only because `persistState` defaults to `false`. Set `persistState` to `true` in JSON to have `/fast` write `desiredActive` for future sessions.
 
@@ -53,18 +73,33 @@ Default config:
 }
 ```
 
-`supportedModels` controls where Fast Mode is allowed to turn on:
+`supportedModels` controls which models are **Supported Models**:
 
-- Each entry is a Pi model key in the form `provider/model`, for example `openai/gpt-5.5`.
-- When Fast Mode is on and the current model matches, the extension asks for OpenAI's `priority` service tier.
+- Each entry is an exact Pi model key in the form `provider/model`, for example `openai/gpt-5.5`.
+- Matching is exact. Wildcard, prefix, and regex-like entries are ignored rather than treated as patterns.
+- An explicit empty list is valid and intentionally disables all Fast activation.
+- Invalid entries are ignored with warnings; valid entries in the same list are still kept.
 
 `footer.mode` values:
 
 - `replace` installs the Footer Clone and shows inline `fast` after the model name only while Fast Mode is active.
-- `status` leaves Pi's footer in place and publishes only a `fast` status indicator while active.
+- `status` leaves Pi's footer in place and publishes only a plain `fast` status indicator while active.
 - `off` leaves footer/status UI untouched.
 
 Fast colors accept six-digit hex values, 256-color indexes, variable references from `footer.vars`, or an empty string for the terminal default foreground. Pi's built-in `light` theme uses `lightFastColor`; other themes use `darkFastColor`.
+
+## Warnings and config repair
+
+Warnings from config loading, config writes, supported-model normalization, and invalid Fast Desired Handoff values are shown through Pi UI notifications when a UI warning sink is available. Headless runs fall back to console warnings prefixed with `[pi-openai-fast]`. Warning delivery failures are ignored so startup and command handling can continue.
+
+A **Malformed Fast Config** is a selected config file that exists but cannot be read as a JSON object. Loading remains tolerant and can fall back to other layers or defaults, but preference writes are conservative:
+
+- Writes target project config when it exists; otherwise they target global config.
+- If the selected write target is a **Malformed Fast Config**, the file is preserved byte-for-byte and `desiredActive` is not written.
+- A malformed project config prevents writing that project target instead of falling back to overwrite global config.
+- Repair the malformed JSON manually before `/fast` preference saves can persist again.
+
+Unknown user-owned config fields are preserved on successful writes, while known invalid fields may be sanitized. The legacy `active` field is read only as a migration alias when `desiredActive` is missing and is omitted on write.
 
 ## Reference attribution
 
