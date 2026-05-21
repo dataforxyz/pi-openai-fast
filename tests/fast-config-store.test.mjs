@@ -512,6 +512,72 @@ test("valid string color indexes are normalized on writes while footer siblings 
   });
 });
 
+test("successful writes remove literal legacy fast label colors while preserving user config fields", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const projectPath = store.paths(cwd).project;
+
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(
+    projectPath,
+    JSON.stringify({
+      persistState: true,
+      footer: {
+        mode: "status",
+        vars: { legacyPink: "#ff50be", keep: "value", drop: 7 },
+        darkFastColor: " #FF50BE ",
+        lightFastColor: " #d20000 ",
+        unknownFooter: { keep: true },
+      },
+      unknownTop: { keep: true },
+    }),
+  );
+
+  await store.writeDesiredActive(cwd, true);
+
+  assert.deepEqual(JSON.parse(await readFile(projectPath, "utf8")), {
+    persistState: true,
+    desiredActive: true,
+    footer: {
+      mode: "status",
+      vars: { legacyPink: "#ff50be", keep: "value" },
+      unknownFooter: { keep: true },
+    },
+    unknownTop: { keep: true },
+  });
+});
+
+test("successful writes preserve numeric and variable-valued fast label color overrides", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const projectPath = store.paths(cwd).project;
+
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(
+    projectPath,
+    JSON.stringify({
+      footer: {
+        vars: { legacyRed: "#d20000", keep: "value", drop: 7 },
+        darkFastColor: 42,
+        lightFastColor: " legacyRed ",
+      },
+    }),
+  );
+
+  await store.writeDesiredActive(cwd, true);
+
+  assert.deepEqual(JSON.parse(await readFile(projectPath, "utf8")), {
+    desiredActive: true,
+    footer: {
+      vars: { legacyRed: "#d20000", keep: "value" },
+      darkFastColor: 42,
+      lightFastColor: "legacyRed",
+    },
+  });
+});
+
 test("invalid known config values fall back without losing valid nested siblings", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");

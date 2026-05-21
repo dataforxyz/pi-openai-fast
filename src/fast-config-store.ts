@@ -217,6 +217,14 @@ function migratedDesiredActive(source: JsonRecord, fallback: boolean): boolean {
   return fallback;
 }
 
+function normalizeWritableFastColorValue(value: unknown): FastColorValue | undefined {
+  if (isLegacyFastLabelColorLiteral(value)) {
+    return undefined;
+  }
+
+  return normalizeFastColorValue(value);
+}
+
 function sanitizeFooterRecordForWrite(source: JsonRecord): JsonRecord {
   const next: JsonRecord = { ...source };
 
@@ -233,7 +241,7 @@ function sanitizeFooterRecordForWrite(source: JsonRecord): JsonRecord {
   }
 
   if (hasOwnField(next, "darkFastColor")) {
-    const darkFastColor = normalizeFastColorValue(next.darkFastColor);
+    const darkFastColor = normalizeWritableFastColorValue(next.darkFastColor);
     if (darkFastColor === undefined) {
       delete next.darkFastColor;
     } else {
@@ -242,7 +250,7 @@ function sanitizeFooterRecordForWrite(source: JsonRecord): JsonRecord {
   }
 
   if (hasOwnField(next, "lightFastColor")) {
-    const lightFastColor = normalizeFastColorValue(next.lightFastColor);
+    const lightFastColor = normalizeWritableFastColorValue(next.lightFastColor);
     if (lightFastColor === undefined) {
       delete next.lightFastColor;
     } else {
