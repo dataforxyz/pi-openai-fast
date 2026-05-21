@@ -366,6 +366,81 @@ test("same-process replacement reads valid desired handoff off before persisted 
   assert.deepEqual(harness.configStore.writes, []);
 });
 
+test("desired handoff on does not leak into provider payloads or replace footer while inactive", async () => {
+  await withFastDesiredHandoffEnv("1", async () => {
+    const harness = createHarness({
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    });
+    const { ctx, footer } = createContext({
+      captureFooter: true,
+      currentModel: model("partner", "gpt-5.4"),
+    });
+
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+    const inactiveOutput = footer.component.render(100).join("\n");
+    const [inactivePayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.4" } },
+      ctx,
+    );
+
+    await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.5") }, ctx);
+    const activeOutput = footer.component.render(100).join("\n");
+    const [activePayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      ctx,
+    );
+
+    assert.equal(inactivePayload, undefined);
+    assert.doesNotMatch(inactiveOutput, /\bfast\b/);
+    assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
+    assert.match(activeOutput, /fast/);
+  });
+});
+
+test("session-only /fast desired-on does not leak into provider payloads or replace footer while inactive", async () => {
+  const harness = createHarness({
+    persistState: false,
+    desiredActive: false,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+  });
+  const { ctx, footer } = createContext({
+    captureFooter: true,
+    currentModel: model("partner", "gpt-5.4"),
+  });
+
+  await harness.commands.get("fast").handler("", ctx);
+  const inactiveOutput = footer.component.render(100).join("\n");
+  const [inactivePayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.4" } },
+    ctx,
+  );
+
+  await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.5") }, ctx);
+  const activeOutput = footer.component.render(100).join("\n");
+  const [activePayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    ctx,
+  );
+
+  assert.equal(process.env[FAST_DESIRED_HANDOFF_ENV], "1");
+  assert.equal(inactivePayload, undefined);
+  assert.doesNotMatch(inactiveOutput, /\bfast\b/);
+  assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.match(activeOutput, /fast/);
+});
+
 test("invalid desired handoff warns once and falls through to config-derived startup state", async () => {
   await withFastDesiredHandoffEnv("true", async () => {
     const nonPersistentRun = createHarness({
@@ -932,6 +1007,46 @@ test("status mode does not publish status when active fast state is false", asyn
   assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: "fast" });
 });
 
+test("status mode with desired handoff on publishes fast only while active", async () => {
+  await withFastDesiredHandoffEnv("1", async () => {
+    const harness = createHarness({
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "status", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    });
+    const { ctx, footer, statusCalls, statusByKey } = createContext({
+      captureFooter: true,
+      currentModel: model("partner", "gpt-5.4"),
+      statuses: { "other-extension": "busy" },
+    });
+
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+    const [inactivePayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.4" } },
+      ctx,
+    );
+
+    await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.5") }, ctx);
+    const [activePayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      ctx,
+    );
+
+    assert.deepEqual(footer.setFooterCalls, []);
+    assert.equal(inactivePayload, undefined);
+    assert.deepEqual(statusCalls.at(-2), { key: FAST_STATUS_KEY, text: undefined });
+    assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
+    assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: "fast" });
+    assert.equal(statusByKey.get(FAST_STATUS_KEY), "fast");
+    assert.equal(statusByKey.get("other-extension"), "busy");
+  });
+});
+
 test("off mode does not install footer or publish status but still injects service tier when active", async () => {
   const harness = createHarness({
     persistState: false,
@@ -958,6 +1073,35 @@ test("off mode does not install footer or publish status but still injects servi
   assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
   assert.deepEqual(footer.setFooterCalls, []);
   assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: undefined });
+});
+
+test("off mode with desired handoff on leaves footer and status output untouched while active", async () => {
+  await withFastDesiredHandoffEnv("1", async () => {
+    const harness = createHarness({
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "off", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    });
+    const { ctx, footer, statusByKey } = createContext({
+      captureFooter: true,
+      currentModel: model("partner", "gpt-5.5"),
+      statuses: { "other-extension": "busy" },
+    });
+
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+    const [activePayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      ctx,
+    );
+
+    assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
+    assert.deepEqual(footer.setFooterCalls, []);
+    assert.equal(statusByKey.has(FAST_STATUS_KEY), false);
+    assert.equal(statusByKey.get("other-extension"), "busy");
+  });
 });
 
 test("session shutdown clears owned footer and status state", async () => {
