@@ -2,6 +2,8 @@
 
 Pi extension for OpenAI Fast Mode.
 
+Requires pi 0.75.3 or newer.
+
 ## Install
 
 ```bash
@@ -24,9 +26,11 @@ pi install git:github.com/studioarray/pi-openai-fast
 ]
 ```
 
+Fast Mode activates only when the current model matches one of these default entries. To change the list, edit `supportedModels` as shown in the config below.
+
 ## Config
 
-Config is read from Global Config at `~/.pi/agent/extensions/pi-openai-fast.json` and Project Config at `.pi/extensions/pi-openai-fast.json`.
+Extension config is read from `~/.pi/agent/extensions/pi-openai-fast.json` and `.pi/extensions/pi-openai-fast.json`.
 
 By default, `/fast` is session-only because `persistState` defaults to `false`. Set `persistState` to `true` in JSON to have `/fast` write `desiredActive` for future sessions.
 
@@ -51,6 +55,11 @@ Default config:
 }
 ```
 
+`supportedModels` controls where Fast Mode is allowed to turn on:
+
+- Each entry is a Pi model key in the form `provider/model`, for example `openai/gpt-5.5`.
+- When Fast Mode is on and the current model matches, the extension asks for OpenAI's `priority` service tier.
+
 `footer.mode` values:
 
 - `replace` installs the Footer Clone and shows inline `fast` after the model name only while Fast Mode is active.
@@ -58,7 +67,6 @@ Default config:
 - `off` leaves footer/status UI untouched.
 
 Fast colors accept six-digit hex values, 256-color indexes, variable references from `footer.vars`, or an empty string for the terminal default foreground. Pi's built-in `light` theme uses `lightFastColor`; other themes use `darkFastColor`.
-
 
 ## Reference attribution
 
