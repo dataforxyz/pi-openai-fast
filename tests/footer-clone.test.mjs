@@ -30,6 +30,10 @@ function createTheme(options = {}) {
     },
   };
 
+  if (options.name !== undefined) {
+    theme.name = options.name;
+  }
+
   if (options.withThinkingBorder !== false) {
     theme.getThinkingBorderColor = (level) => {
       options.thinkingLevels?.push(level);
@@ -257,6 +261,48 @@ test("active clone reapplies dim styling after a configured colored fast label",
   const statsLine = lines[1] ?? "";
 
   assert.match(statsLine, /\x1b\[38;5;17mfast\x1b\[39m\x1b\[38;5;8m • xhigh/);
+});
+
+test("explicit active-theme fast label color overrides the thinking-border renderer", () => {
+  const thinkingLevels = [];
+  const lightLine = createClone({
+    active: true,
+    theme: createTheme({ name: "light", thinkingLevels }),
+    thinkingLevel: "high",
+    fastLabelColors: { dark: "#112233", light: "#445566", vars: {} },
+  }).render(120)[1] ?? "";
+  const darkLine = createClone({
+    active: true,
+    theme: createTheme({ name: "dark", thinkingLevels }),
+    thinkingLevel: "high",
+    fastLabelColors: { dark: "#112233", light: "#445566", vars: {} },
+  }).render(120)[1] ?? "";
+
+  assert.match(lightLine, /\x1b\[38;5;59mfast\x1b\[39m\x1b\[38;5;8m • high/);
+  assert.match(darkLine, /\x1b\[38;5;17mfast\x1b\[39m\x1b\[38;5;8m • high/);
+  assert.deepEqual(thinkingLevels, []);
+});
+
+test("missing active-theme fast label override falls back to the theme-matched renderer instead of the sibling field", () => {
+  const thinkingLevels = [];
+  const lightLine = createClone({
+    active: true,
+    theme: createTheme({ name: "light", thinkingLevels }),
+    thinkingLevel: "high",
+    fastLabelColors: { dark: "#112233", vars: {} },
+  }).render(120)[1] ?? "";
+  const nonLightLine = createClone({
+    active: true,
+    theme: createTheme({ name: "nocturne", thinkingLevels }),
+    thinkingLevel: "low",
+    fastLabelColors: { light: "#445566", vars: {} },
+  }).render(120)[1] ?? "";
+
+  assert.match(lightLine, /\x1b\[38;5;147mfast\x1b\[39m\x1b\[38;5;8m • high/);
+  assert.doesNotMatch(lightLine, /\x1b\[38;5;17mfast/);
+  assert.match(nonLightLine, /\x1b\[38;5;75mfast\x1b\[39m\x1b\[38;5;8m • low/);
+  assert.doesNotMatch(nonLightLine, /\x1b\[38;5;59mfast/);
+  assert.deepEqual(thinkingLevels, ["high", "low"]);
 });
 
 test("ANSI fast label color preserves visible width-based truncation", () => {

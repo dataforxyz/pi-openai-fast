@@ -342,6 +342,30 @@ test("thinking level changes re-render the replacement footer with the current t
   assert.equal(footer.renderRequests > 0, true);
 });
 
+test("lifecycle threads valid custom fast label color config into the replacement footer", async () => {
+  const thinkingLevels = [];
+  const harness = createHarness(
+    {
+      persistState: true,
+      desiredActive: true,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: { brand: "#112233" }, darkFastColor: "brand" },
+    },
+    { thinkingLevel: "high" },
+  );
+  const { ctx, footer } = createContext({
+    captureFooter: true,
+    currentModel: { provider: "partner", id: "gpt-5.5", reasoning: true, contextWindow: 200_000 },
+    theme: createTheme({ thinkingLevels }),
+  });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const output = footer.component.render(100).join("\n");
+
+  assert.match(output, /gpt-5\.5 .*\x1b\[38;5;17mfast\x1b\[39m\x1b\[38;5;8m • high/);
+  assert.deepEqual(thinkingLevels, []);
+});
+
 test("session startup routes config and handoff warnings to UI once for the current operation", async () => {
   const configWarning = {
     code: "config-supported-models-dropped",

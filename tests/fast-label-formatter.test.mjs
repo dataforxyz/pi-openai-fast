@@ -88,6 +88,45 @@ test("uses active theme color tokens for configured fast-mode overrides", () => 
   );
 });
 
+test("formats supported explicit fast label color override forms", () => {
+  const formatter = new FastLabelFormatter();
+  let defaultRenderCalls = 0;
+  const renderDefaultActiveLabel = () => {
+    defaultRenderCalls += 1;
+    return "<theme-fast>";
+  };
+
+  assert.equal(
+    formatter.formatFastLabel({
+      active: true,
+      darkFastColor: "42",
+      colorMode: "256color",
+      renderDefaultActiveLabel,
+    }),
+    "\x1b[38;5;42mfast\x1b[39m",
+  );
+  assert.equal(
+    formatter.formatFastLabel({
+      active: true,
+      darkFastColor: "brand",
+      footerVars: { brand: "accent", accent: "#112233" },
+      colorMode: "256color",
+      renderDefaultActiveLabel,
+    }),
+    "\x1b[38;5;17mfast\x1b[39m",
+  );
+  assert.equal(
+    formatter.formatFastLabel({
+      active: true,
+      darkFastColor: "",
+      colorMode: "256color",
+      renderDefaultActiveLabel,
+    }),
+    "\x1b[39mfast\x1b[39m",
+  );
+  assert.equal(defaultRenderCalls, 0);
+});
+
 test("resolves footer variable references before color conversion", () => {
   const formatter = new FastLabelFormatter();
 
@@ -99,6 +138,29 @@ test("resolves footer variable references before color conversion", () => {
       colorMode: "256color",
     }),
     "\x1b[38;5;42mfast\x1b[39m",
+  );
+});
+
+test("falls back to the default active renderer when the active theme override is absent", () => {
+  const formatter = new FastLabelFormatter();
+
+  assert.equal(
+    formatter.formatFastLabel({
+      active: true,
+      darkFastColor: "#112233",
+      isLightTheme: true,
+      renderDefaultActiveLabel: () => "<theme-fast>",
+    }),
+    "<theme-fast>",
+  );
+  assert.equal(
+    formatter.formatFastLabel({
+      active: true,
+      lightFastColor: "#445566",
+      isLightTheme: false,
+      renderDefaultActiveLabel: () => "<theme-fast>",
+    }),
+    "<theme-fast>",
   );
 });
 

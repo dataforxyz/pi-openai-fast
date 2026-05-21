@@ -20,9 +20,12 @@ test("rejects invalid 256-color indexes during normalization and resolution", ()
   assert.equal(resolveFastColorValue("256", {}), undefined);
 });
 
-test("resolves nested fast color variables to the final color token", () => {
+test("resolves fast color variables to each supported final token", () => {
   assert.equal(resolveFastColorValue("brand", { brand: "accent", accent: "42" }), "42");
   assert.equal(resolveFastColorValue("brandHex", { brandHex: "accentHex", accentHex: "#112233" }), "#112233");
+  assert.equal(resolveFastColorValue("brandDefault", { brandDefault: "" }), "");
+  assert.equal(normalizeFastColorValue(42), 42);
+  assert.equal(normalizeFastColorValue(" 42 "), "42");
 });
 
 test("treats an empty fast color string as terminal default foreground", () => {

@@ -314,6 +314,32 @@ test("invalid string footer colors are omitted on load while valid color sibling
   });
 });
 
+test("valid custom and variable-valued footer colors are preserved on load", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      footer: {
+        vars: { brand: "#123456" },
+        darkFastColor: "#abcdef",
+        lightFastColor: "brand",
+      },
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).footer, {
+    ...DEFAULT_FAST_CONFIG.footer,
+    vars: { brand: "#123456" },
+    darkFastColor: "#abcdef",
+    lightFastColor: "brand",
+  });
+});
+
 test("valid numeric and empty footer color values are preserved", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");
