@@ -1,9 +1,5 @@
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import {
-  DEFAULT_DARK_FAST_COLOR,
-  DEFAULT_LIGHT_FAST_COLOR,
-  type FastLabelFormatter,
-} from "./fast-label-formatter.ts";
+import type { FastLabelFormatter } from "./fast-label-formatter.ts";
 import type { FastColorMode, FastColorValue } from "./fast-colors.ts";
 
 /*
@@ -183,8 +179,8 @@ export class FooterClone implements Component {
   private readonly isFastActive: () => boolean;
   private readonly getThinkingLevel: () => string | undefined;
   private readonly fastLabelColors: {
-    dark: FastColorValue;
-    light: FastColorValue;
+    dark?: FastColorValue | undefined;
+    light?: FastColorValue | undefined;
     vars: Record<string, string>;
   };
   private readonly isThemeLight: boolean;
@@ -201,8 +197,8 @@ export class FooterClone implements Component {
     this.isFastActive = options.isFastActive;
     this.getThinkingLevel = options.getThinkingLevel;
     this.fastLabelColors = {
-      dark: options.fastLabelColors?.dark ?? DEFAULT_DARK_FAST_COLOR,
-      light: options.fastLabelColors?.light ?? DEFAULT_LIGHT_FAST_COLOR,
+      dark: options.fastLabelColors?.dark,
+      light: options.fastLabelColors?.light,
       vars: { ...(options.fastLabelColors?.vars ?? {}) },
     };
     this.isThemeLight = options.theme.name?.toLowerCase() === "light";
@@ -334,6 +330,7 @@ export class FooterClone implements Component {
       footerVars: this.fastLabelColors.vars,
       isLightTheme: this.isThemeLight,
       colorMode: this.colorMode,
+      renderDefaultActiveLabel: () => "fast",
     });
 
     let statsLeftWidth = visibleWidth(statsLeft);

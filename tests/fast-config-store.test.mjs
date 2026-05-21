@@ -22,8 +22,6 @@ test("default config matches the PRD config contract", () => {
     footer: {
       mode: "replace",
       vars: {},
-      darkFastColor: "#ff50be",
-      lightFastColor: "#d20000",
     },
   });
 });
@@ -81,7 +79,6 @@ test("merges defaults before global config and project config overrides global c
       mode: "status",
       vars: {},
       darkFastColor: "#abcdef",
-      lightFastColor: "#d20000",
     },
   });
 });
@@ -291,7 +288,7 @@ test("falls back to defaults and warns when config cannot be read", async () => 
   assert.equal(warnings[0].path, globalPath);
 });
 
-test("invalid string footer colors fall back on load while valid color siblings remain", async () => {
+test("invalid string footer colors are omitted on load while valid color siblings remain", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");
   const store = new FastConfigStore({ home });
@@ -313,7 +310,6 @@ test("invalid string footer colors fall back on load while valid color siblings 
   assert.deepEqual((await store.load(cwd)).footer, {
     mode: "status",
     vars: { brand: "#123456" },
-    darkFastColor: DEFAULT_FAST_CONFIG.footer.darkFastColor,
     lightFastColor: "brand",
   });
 });

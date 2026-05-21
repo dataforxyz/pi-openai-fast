@@ -165,6 +165,8 @@ test("replace mode installs one owned footer clone and keeps it installed while 
   assert.match(inactiveOutput, /gpt-5\.5 • xhigh/);
   assert.doesNotMatch(inactiveOutput, /gpt-5\.5 fast/);
   assert.match(activeOutput, /gpt-5\.5 .*fast/);
+  assert.doesNotMatch(activeOutput, /\x1b\[38;5;205mfast/);
+  assert.doesNotMatch(activeOutput, /\x1b\[38;5;160mfast/);
   assert.equal(tui.renderRequests > 0, true);
 });
 

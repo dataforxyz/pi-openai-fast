@@ -80,7 +80,13 @@ function createContext(overrides = {}) {
   };
 }
 
-function createClone({ active = false, context = createContext(), footerData = createFooterData(), thinkingLevel = "xhigh" } = {}) {
+function createClone({
+  active = false,
+  context = createContext(),
+  footerData = createFooterData(),
+  thinkingLevel = "xhigh",
+  fastLabelColors,
+} = {}) {
   return new FooterClone({
     context,
     footerData,
@@ -88,6 +94,7 @@ function createClone({ active = false, context = createContext(), footerData = c
     labelFormatter: new FastLabelFormatter(),
     isFastActive: () => active,
     getThinkingLevel: () => thinkingLevel,
+    fastLabelColors,
   });
 }
 
@@ -174,11 +181,20 @@ test("active clone inserts the fast label after the model name before thinking l
   assert.equal(lines.every((line) => visibleWidth(line) <= 120), true);
 });
 
-test("active clone reapplies dim styling after the colored fast label", () => {
+test("active clone with no configured fast label color uses the default active label path", () => {
   const lines = createClone({ active: true }).render(120);
   const statsLine = lines[1] ?? "";
 
-  assert.match(statsLine, /\x1b\[38;5;205mfast\x1b\[39m\x1b\[38;5;8m • xhigh/);
+  assert.match(statsLine, /gpt-5\.5 fast • xhigh/);
+  assert.doesNotMatch(statsLine, /\x1b\[38;5;205mfast/);
+  assert.doesNotMatch(statsLine, /\x1b\[38;5;160mfast/);
+});
+
+test("active clone reapplies dim styling after a configured colored fast label", () => {
+  const lines = createClone({ active: true, fastLabelColors: { dark: "#112233", vars: {} } }).render(120);
+  const statsLine = lines[1] ?? "";
+
+  assert.match(statsLine, /\x1b\[38;5;17mfast\x1b\[39m\x1b\[38;5;8m • xhigh/);
 });
 
 test("ANSI fast label color preserves visible width-based truncation", () => {
@@ -192,10 +208,10 @@ test("ANSI fast label color preserves visible width-based truncation", () => {
       ]),
   });
 
-  const lines = createClone({ active: true, context, footerData }).render(72);
+  const lines = createClone({ active: true, context, footerData, fastLabelColors: { dark: "#112233", vars: {} } }).render(72);
   const renderLine = lines[1] ?? "";
 
-  assert.match(renderLine, /\x1b\[38;5;8m.*\x1b\[38;5;205mfast\x1b\[39m/);
+  assert.match(renderLine, /\x1b\[38;5;8m.*\x1b\[38;5;17mfast\x1b\[39m/);
   assert.equal(visibleWidth(renderLine) <= 72, true);
   assert.equal(visibleWidth(lines[2]) <= 72, true);
 });

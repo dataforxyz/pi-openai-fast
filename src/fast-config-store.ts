@@ -17,8 +17,8 @@ export type FooterMode = "replace" | "status" | "off";
 export interface FastFooterConfig {
   mode: FooterMode;
   vars: Record<string, string>;
-  darkFastColor: FastColorValue;
-  lightFastColor: FastColorValue;
+  darkFastColor?: FastColorValue | undefined;
+  lightFastColor?: FastColorValue | undefined;
 }
 
 export interface FastConfig {
@@ -35,8 +35,6 @@ export const DEFAULT_FAST_CONFIG: FastConfig = {
   footer: {
     mode: "replace",
     vars: {},
-    darkFastColor: "#ff50be",
-    lightFastColor: "#d20000",
   },
 };
 
@@ -99,10 +97,25 @@ function defaultFastConfig(): FastConfig {
     footer: {
       mode: DEFAULT_FAST_CONFIG.footer.mode,
       vars: { ...DEFAULT_FAST_CONFIG.footer.vars },
-      darkFastColor: DEFAULT_FAST_CONFIG.footer.darkFastColor,
-      lightFastColor: DEFAULT_FAST_CONFIG.footer.lightFastColor,
     },
   };
+}
+
+function footerConfigToRawRecord(config: FastFooterConfig): JsonRecord {
+  const footer: JsonRecord = {
+    mode: config.mode,
+    vars: { ...config.vars },
+  };
+
+  if (config.darkFastColor !== undefined) {
+    footer.darkFastColor = config.darkFastColor;
+  }
+
+  if (config.lightFastColor !== undefined) {
+    footer.lightFastColor = config.lightFastColor;
+  }
+
+  return footer;
 }
 
 function configToRawRecord(config: FastConfig): JsonRecord {
@@ -110,12 +123,7 @@ function configToRawRecord(config: FastConfig): JsonRecord {
     persistState: config.persistState,
     desiredActive: config.desiredActive,
     supportedModels: [...config.supportedModels],
-    footer: {
-      mode: config.footer.mode,
-      vars: { ...config.footer.vars },
-      darkFastColor: config.footer.darkFastColor,
-      lightFastColor: config.footer.lightFastColor,
-    },
+    footer: footerConfigToRawRecord(config.footer),
   };
 }
 

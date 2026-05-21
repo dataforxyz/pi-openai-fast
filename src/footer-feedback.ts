@@ -18,8 +18,8 @@ export interface FooterFeedbackSyncOptions {
   isFastActive: () => boolean;
   getThinkingLevel: () => string | undefined;
   fastLabelColors?: {
-    dark: FastColorValue;
-    light: FastColorValue;
+    dark?: FastColorValue | undefined;
+    light?: FastColorValue | undefined;
     vars: Readonly<Record<string, string>>;
   };
 }
