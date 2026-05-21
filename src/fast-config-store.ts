@@ -39,7 +39,11 @@ export const DEFAULT_FAST_CONFIG: FastConfig = {
   },
 };
 
-export type FastConfigWarningCode = "config-read-failed" | "config-default-write-failed" | "config-write-failed";
+export type FastConfigWarningCode =
+  | "config-read-failed"
+  | "config-default-write-failed"
+  | "config-write-failed"
+  | "config-malformed-write-refused";
 
 export interface FastConfigWarning {
   code: FastConfigWarningCode;
@@ -318,6 +322,24 @@ async function readConfigRecord(path: string, warn: FastConfigWarningSink): Prom
   }
 }
 
+async function readWriteTargetConfigRecord(path: string, warn: FastConfigWarningSink): Promise<ConfigReadResult> {
+  try {
+    return { kind: "loaded", record: parseJsonRecord(await readFile(path, "utf8")) };
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return { kind: "missing" };
+    }
+
+    emitWarning(warn, {
+      code: "config-malformed-write-refused",
+      path,
+      message: `Could not save Fast Mode preference because the config at ${path} could not be read as a JSON object and needs manual repair before saving Fast Mode preferences.`,
+      cause: error,
+    });
+    return { kind: "failed" };
+  }
+}
+
 async function writeConfigRecord(
   path: string,
   record: JsonRecord,
@@ -343,16 +365,12 @@ async function selectWriteTarget(paths: FastConfigPaths): Promise<string> {
   return (await pathExists(paths.project)) ? paths.project : paths.global;
 }
 
-function rawRecordForWrite(readResult: ConfigReadResult): JsonRecord {
+function rawRecordForWrite(readResult: Extract<ConfigReadResult, { kind: "loaded" | "missing" }>): JsonRecord {
   if (readResult.kind === "loaded") {
     return readResult.record;
   }
 
-  if (readResult.kind === "missing") {
-    return configToRawRecord(defaultFastConfig());
-  }
-
-  return {};
+  return configToRawRecord(defaultFastConfig());
 }
 
 export class FastConfigStore implements FastConfigRepository {
@@ -397,7 +415,12 @@ export class FastConfigStore implements FastConfigRepository {
   async writeDesiredActive(cwd: string, desiredActive: boolean): Promise<boolean> {
     const paths = this.paths(cwd);
     const target = await selectWriteTarget(paths);
-    const existing = await readConfigRecord(target, this.warn);
+    const existing = await readWriteTargetConfigRecord(target, this.warn);
+
+    if (existing.kind === "failed") {
+      return false;
+    }
+
     const next = sanitizeConfigRecordForWrite(rawRecordForWrite(existing));
     next.desiredActive = desiredActive;
 

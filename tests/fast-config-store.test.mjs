@@ -330,7 +330,52 @@ test("invalid known config values fall back without losing valid nested siblings
   });
 });
 
-test("warns instead of throwing when a config write fails", async () => {
+test("refuses malformed selected project config writes without falling back to global", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const paths = store.paths(cwd);
+  const malformedProjectConfig = "{not-json\n";
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(paths.global, JSON.stringify({ desiredActive: false, globalOnly: true }));
+  await writeFile(paths.project, malformedProjectConfig);
+
+  const saved = await store.writeDesiredActive(cwd, true);
+
+  assert.equal(saved, false);
+  assert.equal(await readFile(paths.project, "utf8"), malformedProjectConfig);
+  assert.deepEqual(JSON.parse(await readFile(paths.global, "utf8")), { desiredActive: false, globalOnly: true });
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].code, "config-malformed-write-refused");
+  assert.equal(warnings[0].path, paths.project);
+  assert.match(warnings[0].message, /manual repair/);
+});
+
+test("refuses selected global config writes when JSON is not an object", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const globalPath = store.paths(cwd).global;
+  const nonObjectConfig = "[]\n";
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(globalPath, nonObjectConfig);
+
+  const saved = await store.writeDesiredActive(cwd, true);
+
+  assert.equal(saved, false);
+  assert.equal(await readFile(globalPath, "utf8"), nonObjectConfig);
+  assert.deepEqual(
+    warnings.map(({ code, path }) => ({ code, path })),
+    [{ code: "config-malformed-write-refused", path: globalPath }],
+  );
+});
+
+test("refuses unreadable selected write target without throwing", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");
   const warnings = [];
@@ -342,7 +387,9 @@ test("warns instead of throwing when a config write fails", async () => {
   const saved = await store.writeDesiredActive(cwd, true);
 
   assert.equal(saved, false);
-  assert.ok(warnings.some((warning) => warning.code === "config-write-failed" && warning.path === projectPath));
+  assert.ok(
+    warnings.some((warning) => warning.code === "config-malformed-write-refused" && warning.path === projectPath),
+  );
 });
 
 test("writes desiredActive to the config target without changing other persisted fields", async () => {
