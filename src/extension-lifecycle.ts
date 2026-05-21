@@ -5,10 +5,9 @@ import type {
   ExtensionContext,
   ExtensionEvent,
 } from "@earendil-works/pi-coding-agent";
-import { FAST_COMMAND, FAST_SETTINGS_COMMAND } from "./capabilities.ts";
+import { FAST_COMMAND } from "./capabilities.ts";
 import { executeFastCommand } from "./fast-command.ts";
 import { DEFAULT_FAST_CONFIG, FastConfigStore, type FastConfig, type FastConfigRepository } from "./fast-config-store.ts";
-import { runFastSettings } from "./fast-settings.ts";
 import { FastStateEngine } from "./fast-state-engine.ts";
 import { FooterFeedback } from "./footer-feedback.ts";
 import { ServiceTierInjector } from "./service-tier-injector.ts";
@@ -142,37 +141,6 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
       if (result.kind === "toggled") {
         currentConfig = { ...currentConfig, desiredActive: result.state.desiredActive };
         footerFeedback.notifyForTransition(result.transition, getNotifier(ctx.ui));
-        syncFooter(ctx);
-      }
-    },
-  });
-
-  pi.registerCommand(FAST_SETTINGS_COMMAND, {
-    description: "Configure OpenAI Fast Mode preferences",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      if (typeof ctx.ui?.select !== "function") {
-        return;
-      }
-
-      const config = await ensureConfig(ctx);
-      const result = await runFastSettings({
-        cwd: ctx.cwd,
-        configStore,
-        stateEngine,
-        footerFeedback,
-        ui: {
-          notify(message, type) {
-            notifyUi(ctx.ui, message, type ?? "info");
-          },
-          select: ctx.ui.select,
-          input: typeof ctx.ui.input === "function" ? ctx.ui.input.bind(ctx.ui) : undefined,
-        },
-        currentModel: ctx.model,
-        initialConfig: config,
-      });
-
-      if (result.kind === "saved") {
-        currentConfig = result.config;
         syncFooter(ctx);
       }
     },

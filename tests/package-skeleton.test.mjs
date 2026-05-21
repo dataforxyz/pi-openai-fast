@@ -37,7 +37,7 @@ test("package manifest is installable by Pi and targets current Pi packages", as
   );
 });
 
-test("public extension surface is limited to fast mode, footer/status feedback, and fast settings", async () => {
+test("public extension surface is limited to fast mode and footer/status feedback", async () => {
   const extensionModule = await import(pathToFileURL(resolve(repoRoot, "index.ts")).href);
 
   assert.equal(typeof extensionModule.default, "function");
@@ -45,7 +45,6 @@ test("public extension surface is limited to fast mode, footer/status feedback, 
   assert.deepEqual(extensionModule.FAST_EXTENSION_CAPABILITIES, [
     "fast-mode",
     "footer-status-feedback",
-    "fast-settings",
   ]);
 
   const forbiddenSurface = /usage|image|pet|openai-settings|model-selection|transport|auth/i;

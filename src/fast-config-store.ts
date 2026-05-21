@@ -55,18 +55,9 @@ export interface FastConfigStoreOptions {
   warn?: FastConfigWarningSink;
 }
 
-export interface FastSettingsUpdate {
-  persistState?: boolean | undefined;
-  desiredActive?: boolean | undefined;
-  footerMode?: FooterMode | undefined;
-  darkFastColor?: FastColorValue | undefined;
-  lightFastColor?: FastColorValue | undefined;
-}
-
 export interface FastConfigRepository {
   load(cwd: string): Promise<FastConfig>;
   writeDesiredActive(cwd: string, desiredActive: boolean): Promise<boolean>;
-  writeSettings(cwd: string, update: FastSettingsUpdate): Promise<boolean>;
 }
 
 interface FastConfigPaths {
@@ -364,35 +355,6 @@ function rawRecordForWrite(readResult: ConfigReadResult): JsonRecord {
   return {};
 }
 
-function applySettingsUpdate(record: JsonRecord, update: FastSettingsUpdate): JsonRecord {
-  const next = sanitizeConfigRecordForWrite(record);
-
-  if (update.persistState !== undefined) {
-    next.persistState = update.persistState;
-  }
-
-  if (update.desiredActive !== undefined) {
-    next.desiredActive = update.desiredActive;
-  }
-
-  if (update.footerMode !== undefined) {
-    const footer = isRecord(next.footer) ? next.footer : {};
-    next.footer = { ...footer, mode: update.footerMode };
-  }
-
-  if (update.darkFastColor !== undefined) {
-    const footer = isRecord(next.footer) ? next.footer : {};
-    next.footer = { ...footer, darkFastColor: update.darkFastColor };
-  }
-
-  if (update.lightFastColor !== undefined) {
-    const footer = isRecord(next.footer) ? next.footer : {};
-    next.footer = { ...footer, lightFastColor: update.lightFastColor };
-  }
-
-  return next;
-}
-
 export class FastConfigStore implements FastConfigRepository {
   private readonly home: string;
   private readonly warn: FastConfigWarningSink;
@@ -438,15 +400,6 @@ export class FastConfigStore implements FastConfigRepository {
     const existing = await readConfigRecord(target, this.warn);
     const next = sanitizeConfigRecordForWrite(rawRecordForWrite(existing));
     next.desiredActive = desiredActive;
-
-    return await writeConfigRecord(target, next, this.warn, "config-write-failed");
-  }
-
-  async writeSettings(cwd: string, update: FastSettingsUpdate): Promise<boolean> {
-    const paths = this.paths(cwd);
-    const target = await selectWriteTarget(paths);
-    const existing = await readConfigRecord(target, this.warn);
-    const next = applySettingsUpdate(rawRecordForWrite(existing), update);
 
     return await writeConfigRecord(target, next, this.warn, "config-write-failed");
   }

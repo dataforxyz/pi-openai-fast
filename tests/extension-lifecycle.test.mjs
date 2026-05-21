@@ -23,7 +23,6 @@ class MemoryConfigStore {
     this.config = config;
     this.desiredActiveWriteResult = options.desiredActiveWriteResult ?? true;
     this.writes = [];
-    this.settingsWrites = [];
   }
 
   async load(cwd) {
@@ -34,20 +33,6 @@ class MemoryConfigStore {
   async writeDesiredActive(cwd, desiredActive) {
     this.writes.push({ cwd, desiredActive });
     return this.desiredActiveWriteResult;
-  }
-
-  async writeSettings(cwd, update) {
-    this.settingsWrites.push({ cwd, update });
-    this.config = {
-      ...this.config,
-      persistState: update.persistState ?? this.config.persistState,
-      desiredActive: update.desiredActive ?? this.config.desiredActive,
-      footer: {
-        ...this.config.footer,
-        mode: update.footerMode ?? this.config.footer.mode,
-      },
-    };
-    return true;
   }
 }
 
@@ -185,6 +170,18 @@ test("lifecycle registers --fast as a boolean startup flag", () => {
   assert.equal(flag?.type, "boolean");
   assert.equal(flag?.default, false);
   assert.equal(harness.flagValues.get("fast"), false);
+});
+
+test("lifecycle keeps settings JSON-only by not registering an interactive settings command", () => {
+  const harness = createHarness({
+    persistState: true,
+    desiredActive: false,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+  });
+
+  assert.equal(harness.commands.has("fast"), true);
+  assert.equal(harness.commands.has("openai-fast-settings"), false);
 });
 
 test("replace footer clone installs on startup while inactive and updates active label without reinstall", async () => {
@@ -483,83 +480,6 @@ test("/fast warns when the Desired Fast State toggles but cannot be saved", asyn
   assert.deepEqual(requestPayload, { model: "gpt-5.5", service_tier: "priority" });
 });
 
-test("/openai-fast-settings edits durable Fast Mode preference and updates current fast state", async () => {
-  const harness = createHarness({
-    persistState: false,
-    desiredActive: false,
-    supportedModels: ["partner/gpt-5.5"],
-    footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
-  });
-  const { ctx } = createContext({ currentModel: model("partner", "gpt-5.5") });
-  const selections = ["Fast Mode", "true"];
-  const selectCalls = [];
-  ctx.ui.select = async (title, options) => {
-    selectCalls.push({ title, options });
-    return selections.shift();
-  };
-
-  await harness.commands.get("openai-fast-settings").handler("", ctx);
-  const [requestPayload] = await emit(
-    harness,
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
-    ctx,
-  );
-
-  await harness.commands.get("fast").handler("", ctx);
-  const [toggledOffPayload] = await emit(
-    harness,
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
-    ctx,
-  );
-
-  assert.deepEqual(selectCalls, [
-    {
-      title: "OpenAI Fast Settings",
-      options: ["Fast Mode", "Persist State", "Footer Mode", "Dark Fast Color", "Light Fast Color"],
-    },
-    { title: "Fast Mode", options: ["true", "false"] },
-  ]);
-  assert.deepEqual(harness.configStore.settingsWrites, [{ cwd: "/work/repo", update: { desiredActive: true } }]);
-  assert.deepEqual(harness.configStore.writes, []);
-  assert.deepEqual(requestPayload, { model: "gpt-5.5", service_tier: "priority" });
-  assert.equal(toggledOffPayload, undefined);
-});
-
-test("changing Persist State in settings does not toggle desired state and /fast still obeys persistence", async () => {
-  const harness = createHarness({
-    persistState: true,
-    desiredActive: false,
-    supportedModels: ["partner/gpt-5.5"],
-    footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
-  });
-  const { ctx } = createContext({ currentModel: model("partner", "gpt-5.5") });
-  const selections = ["Persist State", "false"];
-  ctx.ui.select = async () => selections.shift();
-
-  await harness.commands.get("openai-fast-settings").handler("", ctx);
-  const [inactivePayload] = await emit(
-    harness,
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
-    ctx,
-  );
-
-  await harness.commands.get("fast").handler("", ctx);
-  const [activePayload] = await emit(
-    harness,
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
-    ctx,
-  );
-
-  assert.equal(inactivePayload, undefined);
-  assert.deepEqual(harness.configStore.settingsWrites, [{ cwd: "/work/repo", update: { persistState: false } }]);
-  assert.deepEqual(harness.configStore.writes, []);
-  assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
-});
-
 test("status mode publishes only active fast status and never installs a custom footer", async () => {
   const harness = createHarness({
     persistState: true,
@@ -652,33 +572,6 @@ test("off mode does not install footer or publish status but still injects servi
   assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
   assert.deepEqual(footer.setFooterCalls, []);
   assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: undefined });
-});
-
-test("switching to off mode clears owned status but not other extension statuses", async () => {
-  const harness = createHarness({
-    persistState: true,
-    desiredActive: true,
-    supportedModels: ["partner/gpt-5.5"],
-    footer: { mode: "status", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
-  });
-  const { ctx, statusCalls, statusByKey } = createContext({
-    currentModel: model("partner", "gpt-5.5"),
-    statuses: { "other-extension": "busy" },
-  });
-
-  const selections = ["Footer Mode", "off"];
-  ctx.ui.select = async (title, options) => {
-    return selections.shift();
-  };
-
-  await emit(harness, "session_start", { type: "session_start" }, ctx);
-  assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: "fast" });
-  assert.equal(statusByKey.get("other-extension"), "busy");
-
-  await harness.commands.get("openai-fast-settings").handler("", ctx);
-  assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: undefined });
-  assert.equal(statusByKey.has(FAST_STATUS_KEY), false);
-  assert.equal(statusByKey.get("other-extension"), "busy");
 });
 
 test("session shutdown clears owned footer and status state", async () => {
@@ -805,12 +698,12 @@ test("/fast command is robust when UI notifications are unavailable", async () =
   assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
 });
 
-test("lifecycle smoke/regression sweep composes hooks, commands, settings, and cleanup", async () => {
+test("lifecycle smoke/regression sweep composes hooks, commands, and cleanup", async () => {
   const harness = createHarness({
     persistState: true,
     desiredActive: false,
     supportedModels: ["partner/gpt-5.5"],
-    footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    footer: { mode: "status", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
   }, { flags: { fast: false } });
   const { ctx, footer, statusByKey, statusCalls } = createContext({
     captureFooter: true,
@@ -821,8 +714,12 @@ test("lifecycle smoke/regression sweep composes hooks, commands, settings, and c
   const flag = harness.flags.get("fast");
   assert.equal(flag?.type, "boolean");
   assert.equal(harness.flagValues.get("fast"), false);
+  assert.equal(harness.commands.has("fast"), true);
+  assert.equal(harness.commands.has("openai-fast-settings"), false);
 
   await emit(harness, "session_start", { type: "session_start" }, ctx);
+  assert.deepEqual(footer.setFooterCalls, []);
+  assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: undefined });
 
   await harness.commands.get("fast").handler("", ctx);
   const [activePayload] = await emit(
@@ -831,24 +728,7 @@ test("lifecycle smoke/regression sweep composes hooks, commands, settings, and c
     { type: "before_provider_request", payload: { model: "gpt-5.5" } },
     ctx,
   );
-
-  const modelSwitch = ["Footer Mode", "status"];
-  ctx.ui.select = async (_title, options) => {
-    if (options?.includes("Footer Mode")) {
-      return modelSwitch.shift();
-    }
-
-    if (options?.includes("status")) {
-      return "status";
-    }
-
-    return options.at(0);
-  };
-
-  await harness.commands.get("openai-fast-settings").handler("", ctx);
-
   assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
-  assert.equal(footer.setFooterCalls.at(-1), undefined);
   assert.equal(statusByKey.get(FAST_STATUS_KEY), "fast");
 
   await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.4") }, ctx);
@@ -859,6 +739,8 @@ test("lifecycle smoke/regression sweep composes hooks, commands, settings, and c
     ctx,
   );
   assert.equal(unsupportedPayload, undefined);
+  assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: undefined });
+
   await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.5") }, ctx);
   const [reactivatedPayload] = await emit(
     harness,
@@ -867,10 +749,11 @@ test("lifecycle smoke/regression sweep composes hooks, commands, settings, and c
     ctx,
   );
   assert.deepEqual(reactivatedPayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.equal(statusByKey.get(FAST_STATUS_KEY), "fast");
 
-  assert.equal(statusCalls.at(-1).key, FAST_STATUS_KEY);
   await emit(harness, "session_shutdown", { type: "session_shutdown" }, ctx);
 
+  assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: undefined });
   assert.equal(statusByKey.has(FAST_STATUS_KEY), false);
   assert.equal(statusByKey.get("other-extension"), "busy");
 });
