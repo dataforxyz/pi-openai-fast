@@ -15,12 +15,29 @@ const ANSI = {
   warning: "\x1b[33m",
 };
 
-function createTheme() {
-  return {
+const THINKING_ANSI = {
+  minimal: "\x1b[38;5;69m",
+  low: "\x1b[38;5;75m",
+  medium: "\x1b[38;5;111m",
+  high: "\x1b[38;5;147m",
+  xhigh: "\x1b[38;5;183m",
+};
+
+function createTheme(options = {}) {
+  const theme = {
     fg(color, text) {
       return `${ANSI[color] ?? ""}${text}\x1b[39m`;
     },
   };
+
+  if (options.withThinkingBorder !== false) {
+    theme.getThinkingBorderColor = (level) => {
+      options.thinkingLevels?.push(level);
+      return (text) => `${THINKING_ANSI[level] ?? ""}${text}\x1b[39m`;
+    };
+  }
+
+  return theme;
 }
 
 function createFooterData(overrides = {}) {
@@ -84,16 +101,18 @@ function createClone({
   active = false,
   context = createContext(),
   footerData = createFooterData(),
+  theme = createTheme(),
   thinkingLevel = "xhigh",
+  getThinkingLevel,
   fastLabelColors,
 } = {}) {
   return new FooterClone({
     context,
     footerData,
-    theme: createTheme(),
+    theme,
     labelFormatter: new FastLabelFormatter(),
     isFastActive: () => active,
-    getThinkingLevel: () => thinkingLevel,
+    getThinkingLevel: getThinkingLevel ?? (() => thinkingLevel),
     fastLabelColors,
   });
 }
@@ -181,13 +200,56 @@ test("active clone inserts the fast label after the model name before thinking l
   assert.equal(lines.every((line) => visibleWidth(line) <= 120), true);
 });
 
-test("active clone with no configured fast label color uses the default active label path", () => {
-  const lines = createClone({ active: true }).render(120);
-  const statsLine = lines[1] ?? "";
+test("active clone with no configured fast label color uses the current thinking-border color", () => {
+  const thinkingLevels = [];
+  let thinkingLevel = "low";
+  const clone = createClone({
+    active: true,
+    theme: createTheme({ thinkingLevels }),
+    getThinkingLevel: () => thinkingLevel,
+  });
 
-  assert.match(statsLine, /gpt-5\.5 fast • xhigh/);
-  assert.doesNotMatch(statsLine, /\x1b\[38;5;205mfast/);
-  assert.doesNotMatch(statsLine, /\x1b\[38;5;160mfast/);
+  const lowLine = clone.render(120)[1] ?? "";
+  thinkingLevel = "high";
+  const highLine = clone.render(120)[1] ?? "";
+
+  assert.deepEqual(thinkingLevels, ["low", "high"]);
+  assert.match(lowLine, /gpt-5\.5 .*\x1b\[38;5;75mfast\x1b\[39m\x1b\[38;5;8m • low/);
+  assert.match(highLine, /gpt-5\.5 .*\x1b\[38;5;147mfast\x1b\[39m\x1b\[38;5;8m • high/);
+  assert.equal(visibleWidth("\x1b[38;5;75mfast\x1b[39m"), 4);
+});
+
+test("active clone sends each non-off thinking level to the thinking-border renderer", () => {
+  const thinkingLevels = [];
+  const theme = createTheme({ thinkingLevels });
+
+  for (const thinkingLevel of ["minimal", "low", "medium", "high", "xhigh"]) {
+    const statsLine = createClone({ active: true, theme, thinkingLevel }).render(120)[1] ?? "";
+    assert.match(statsLine, new RegExp(`fast\\x1b\\[39m\\x1b\\[38;5;8m • ${thinkingLevel}`));
+  }
+
+  assert.deepEqual(thinkingLevels, ["minimal", "low", "medium", "high", "xhigh"]);
+});
+
+test("active clone falls back to dim fast label for off, missing, unexpected, or unsupported thinking theme", () => {
+  const thinkingLevels = [];
+  const theme = createTheme({ thinkingLevels });
+
+  for (const getThinkingLevel of [() => "off", () => undefined, () => "surprise"]) {
+    const statsLine = createClone({ active: true, theme, getThinkingLevel }).render(120)[1] ?? "";
+    assert.match(statsLine, /gpt-5\.5 .*\x1b\[38;5;8mfast\x1b\[39m\x1b\[38;5;8m • thinking off/);
+    assert.doesNotMatch(statsLine, /\x1b\[38;5;205mfast|\x1b\[38;5;160mfast/);
+  }
+
+  const noThemeApiLine = createClone({
+    active: true,
+    theme: createTheme({ withThinkingBorder: false }),
+    thinkingLevel: "high",
+  }).render(120)[1] ?? "";
+
+  assert.deepEqual(thinkingLevels, []);
+  assert.match(noThemeApiLine, /gpt-5\.5 .*\x1b\[38;5;8mfast\x1b\[39m\x1b\[38;5;8m • high/);
+  assert.equal(visibleWidth(noThemeApiLine) <= 120, true);
 });
 
 test("active clone reapplies dim styling after a configured colored fast label", () => {

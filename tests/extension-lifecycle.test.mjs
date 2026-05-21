@@ -11,12 +11,26 @@ const ANSI = {
   warning: "\x1b[33m",
 };
 
-function createTheme() {
-  return {
+const THINKING_ANSI = {
+  low: "\x1b[38;5;75m",
+  high: "\x1b[38;5;147m",
+};
+
+function createTheme(options = {}) {
+  const theme = {
     fg(color, text) {
       return `${ANSI[color] ?? ""}${text}\x1b[39m`;
     },
   };
+
+  if (options.thinkingLevels) {
+    theme.getThinkingBorderColor = (level) => {
+      options.thinkingLevels.push(level);
+      return (text) => `${THINKING_ANSI[level] ?? ""}${text}\x1b[39m`;
+    };
+  }
+
+  return theme;
 }
 
 class MemoryConfigStore {
@@ -115,7 +129,7 @@ function createContext(options = {}) {
   if (options.captureFooter) {
     ui.setFooter = (factory) => {
       footer.setFooterCalls.push(factory);
-      footer.component = factory === undefined ? undefined : factory(tui, createTheme(), footerData);
+      footer.component = factory === undefined ? undefined : factory(tui, options.theme ?? createTheme(), footerData);
     };
   }
 
@@ -168,7 +182,8 @@ function createHarness(config, options = {}) {
       return flags.has(name) ? flagValues.get(name) : undefined;
     },
     getThinkingLevel() {
-      return options.thinkingLevel ?? "off";
+      const thinkingLevel = typeof options.thinkingLevel === "function" ? options.thinkingLevel() : options.thinkingLevel;
+      return thinkingLevel ?? "off";
     },
     on(event, handler) {
       const existing = handlers.get(event) ?? [];
@@ -292,6 +307,38 @@ test("replace footer clone installs on startup while inactive and updates active
   assert.match(inactiveOutput, /gpt-5\.5 • xhigh/);
   assert.doesNotMatch(inactiveOutput, /gpt-5\.5 fast/);
   assert.match(activeOutput, /gpt-5\.5 .*fast/);
+  assert.equal(footer.renderRequests > 0, true);
+});
+
+test("thinking level changes re-render the replacement footer with the current thinking-border fast label", async () => {
+  let thinkingLevel = "low";
+  const thinkingLevels = [];
+  const harness = createHarness(
+    {
+      persistState: true,
+      desiredActive: true,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {} },
+    },
+    { thinkingLevel: () => thinkingLevel },
+  );
+  const { ctx, footer } = createContext({
+    captureFooter: true,
+    currentModel: { provider: "partner", id: "gpt-5.5", reasoning: true, contextWindow: 200_000 },
+    theme: createTheme({ thinkingLevels }),
+  });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const lowOutput = footer.component.render(100).join("\n");
+
+  thinkingLevel = "high";
+  await emit(harness, "thinking_level_select", { type: "thinking_level_select" }, ctx);
+  const highOutput = footer.component.render(100).join("\n");
+
+  assert.deepEqual(thinkingLevels, ["low", "high"]);
+  assert.match(lowOutput, /gpt-5\.5 .*\x1b\[38;5;75mfast\x1b\[39m\x1b\[38;5;8m • low/);
+  assert.match(highOutput, /gpt-5\.5 .*\x1b\[38;5;147mfast\x1b\[39m\x1b\[38;5;8m • high/);
+  assert.equal(footer.setFooterCalls.length, 1);
   assert.equal(footer.renderRequests > 0, true);
 });
 

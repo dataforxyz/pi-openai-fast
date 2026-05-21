@@ -1,6 +1,11 @@
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { FastLabelFormatter } from "./fast-label-formatter.ts";
 import type { FastColorMode, FastColorValue } from "./fast-colors.ts";
+import {
+  normalizeThinkingLevel,
+  renderThemeMatchedFastLabel,
+  type ThinkingLevel,
+} from "./theme-matched-fast-label-renderer.ts";
 
 /*
  * Portions of this file are adapted from Pi's default footer renderer:
@@ -34,6 +39,7 @@ export interface FooterCloneTheme {
   fg(color: "dim" | "error" | "warning" | string, text: string): string;
   name?: string | undefined;
   getColorMode?: () => FastColorMode;
+  getThinkingBorderColor?: (level: ThinkingLevel) => ((text: string) => string) | undefined;
 }
 
 export interface FooterCloneTui {
@@ -243,7 +249,10 @@ export class FooterClone implements Component {
     }
 
     const renderWidth = Math.max(0, Math.floor(width));
-    const state = { model: context.model, thinkingLevel: this.getThinkingLevel() };
+    const state = {
+      model: context.model,
+      thinkingLevel: normalizeThinkingLevel(this.getThinkingLevel()),
+    };
 
     // Calculate cumulative usage from ALL session entries (not just post-compaction messages)
     let totalInput = 0;
@@ -330,7 +339,7 @@ export class FooterClone implements Component {
       footerVars: this.fastLabelColors.vars,
       isLightTheme: this.isThemeLight,
       colorMode: this.colorMode,
-      renderDefaultActiveLabel: () => "fast",
+      renderDefaultActiveLabel: () => renderThemeMatchedFastLabel(this.theme, state.thinkingLevel),
     });
 
     let statsLeftWidth = visibleWidth(statsLeft);
@@ -347,9 +356,8 @@ export class FooterClone implements Component {
     // Add thinking level indicator if model supports reasoning
     let rightSideWithoutProvider = modelLabel;
     if (state.model?.reasoning) {
-      const thinkingLevel = state.thinkingLevel || "off";
       rightSideWithoutProvider =
-        thinkingLevel === "off" ? `${modelLabel} • thinking off` : `${modelLabel} • ${thinkingLevel}`;
+        state.thinkingLevel === "off" ? `${modelLabel} • thinking off` : `${modelLabel} • ${state.thinkingLevel}`;
     }
 
     // Prepend the provider in parentheses if there are multiple providers and there's enough room
