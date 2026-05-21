@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { afterEach, beforeEach, test } from "node:test";
 import { FAST_STATUS_KEY } from "../src/capabilities.ts";
 import { FAST_COMMAND_SAVE_FAILED_MESSAGE } from "../src/fast-command.ts";
+import { FAST_DESIRED_HANDOFF_ENV } from "../src/fast-desired-handoff.ts";
 import { registerPiOpenAIFast } from "../src/extension-lifecycle.ts";
 
 const ANSI = {
@@ -158,6 +159,41 @@ async function emit(harness, eventName, event, ctx) {
   return results;
 }
 
+let inheritedFastDesiredHandoffEnv;
+
+beforeEach(() => {
+  inheritedFastDesiredHandoffEnv = process.env[FAST_DESIRED_HANDOFF_ENV];
+  delete process.env[FAST_DESIRED_HANDOFF_ENV];
+});
+
+afterEach(() => {
+  if (inheritedFastDesiredHandoffEnv === undefined) {
+    delete process.env[FAST_DESIRED_HANDOFF_ENV];
+  } else {
+    process.env[FAST_DESIRED_HANDOFF_ENV] = inheritedFastDesiredHandoffEnv;
+  }
+});
+
+async function withFastDesiredHandoffEnv(value, run) {
+  const previous = process.env[FAST_DESIRED_HANDOFF_ENV];
+
+  if (value === undefined) {
+    delete process.env[FAST_DESIRED_HANDOFF_ENV];
+  } else {
+    process.env[FAST_DESIRED_HANDOFF_ENV] = value;
+  }
+
+  try {
+    await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[FAST_DESIRED_HANDOFF_ENV];
+    } else {
+      process.env[FAST_DESIRED_HANDOFF_ENV] = previous;
+    }
+  }
+}
+
 test("lifecycle registers --fast as a boolean startup flag", () => {
   const harness = createHarness({
     persistState: true,
@@ -210,6 +246,165 @@ test("replace footer clone installs on startup while inactive and updates active
   assert.doesNotMatch(inactiveOutput, /gpt-5\.5 fast/);
   assert.match(activeOutput, /gpt-5\.5 .*fast/);
   assert.equal(footer.renderRequests > 0, true);
+});
+
+test("same-process replacement reads valid desired handoff on before non-persistent config defaults", async () => {
+  const harness = createHarness({
+    persistState: false,
+    desiredActive: false,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+  });
+  const { ctx } = createContext({ currentModel: model("partner", "gpt-5.5") });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const [initialPayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    ctx,
+  );
+
+  await withFastDesiredHandoffEnv("1", async () => {
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+    const [replacementPayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      ctx,
+    );
+
+    assert.deepEqual(replacementPayload, { model: "gpt-5.5", service_tier: "priority" });
+  });
+
+  assert.equal(initialPayload, undefined);
+  assert.deepEqual(harness.configStore.writes, []);
+});
+
+test("valid desired handoff on derives active state from the selected model", async () => {
+  await withFastDesiredHandoffEnv("1", async () => {
+    const unsupportedRun = createHarness({
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    });
+    const { ctx: unsupportedCtx } = createContext({ currentModel: model("partner", "gpt-5.4") });
+
+    await emit(unsupportedRun, "session_start", { type: "session_start" }, unsupportedCtx);
+    const [unsupportedPayload] = await emit(
+      unsupportedRun,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.4" } },
+      unsupportedCtx,
+    );
+
+    const absentModelRun = createHarness({
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    });
+    const { ctx: absentModelCtx } = createContext({ currentModel: undefined });
+
+    await emit(absentModelRun, "session_start", { type: "session_start" }, absentModelCtx);
+    const [absentPayload] = await emit(
+      absentModelRun,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      absentModelCtx,
+    );
+    await emit(
+      absentModelRun,
+      "model_select",
+      { type: "model_select", model: model("partner", "gpt-5.5") },
+      absentModelCtx,
+    );
+    const [activatedPayload] = await emit(
+      absentModelRun,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      absentModelCtx,
+    );
+
+    assert.equal(unsupportedPayload, undefined);
+    assert.equal(absentPayload, undefined);
+    assert.deepEqual(activatedPayload, { model: "gpt-5.5", service_tier: "priority" });
+  });
+});
+
+test("same-process replacement reads valid desired handoff off before persisted desired-on config", async () => {
+  const harness = createHarness({
+    persistState: true,
+    desiredActive: true,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+  });
+  const { ctx } = createContext({ currentModel: model("partner", "gpt-5.5") });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const [initialPayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    ctx,
+  );
+
+  await withFastDesiredHandoffEnv("0", async () => {
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+    const [replacementPayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      ctx,
+    );
+
+    assert.equal(replacementPayload, undefined);
+  });
+
+  assert.deepEqual(initialPayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.deepEqual(harness.configStore.writes, []);
+});
+
+test("a fresh process without inherited desired handoff does not retain session-only Fast intent", async () => {
+  await withFastDesiredHandoffEnv("1", async () => {
+    const inheritedRun = createHarness({
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    });
+    const { ctx } = createContext({ currentModel: model("partner", "gpt-5.5") });
+
+    await emit(inheritedRun, "session_start", { type: "session_start" }, ctx);
+    const [inheritedPayload] = await emit(
+      inheritedRun,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      ctx,
+    );
+
+    assert.deepEqual(inheritedPayload, { model: "gpt-5.5", service_tier: "priority" });
+  });
+
+  const freshRun = createHarness({
+    persistState: false,
+    desiredActive: false,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+  });
+  const { ctx } = createContext({ currentModel: model("partner", "gpt-5.5") });
+
+  await emit(freshRun, "session_start", { type: "session_start" }, ctx);
+  const [freshPayload] = await emit(
+    freshRun,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    ctx,
+  );
+
+  assert.equal(freshPayload, undefined);
+  assert.deepEqual(freshRun.configStore.writes, []);
 });
 
 test("--fast loads persisted false as in-memory desired true without writing config", async () => {

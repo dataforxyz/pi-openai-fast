@@ -8,10 +8,12 @@ import type {
 import { FAST_COMMAND } from "./capabilities.ts";
 import { executeFastCommand } from "./fast-command.ts";
 import { DEFAULT_FAST_CONFIG, FastConfigStore, type FastConfig, type FastConfigRepository } from "./fast-config-store.ts";
+import { readFastDesiredHandoff } from "./fast-desired-handoff.ts";
 import { FastStateEngine } from "./fast-state-engine.ts";
 import { FooterFeedback } from "./footer-feedback.ts";
 import { ServiceTierInjector } from "./service-tier-injector.ts";
 import { isStartupFastOverrideRequested, registerStartupFastOverrideFlag } from "./startup-fast-override.ts";
+import { resolveStartupDesiredActive } from "./startup-fast-resolution.ts";
 
 type ModelSelectEvent = Extract<ExtensionEvent, { type: "model_select" }>;
 
@@ -107,10 +109,15 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
   ): Promise<FastConfig> {
     currentConfig = await configStore.load(ctx.cwd);
     configLoaded = true;
+    const startupFastOverride = isStartupFastOverrideRequested(pi);
     const transition = stateEngine.transition({
       supportedModels: currentConfig.supportedModels,
-      desiredActive: currentConfig.persistState ? currentConfig.desiredActive : false,
-      startupFastOverride: isStartupFastOverrideRequested(pi),
+      desiredActive: resolveStartupDesiredActive({
+        config: currentConfig,
+        startupFastOverride,
+        fastDesiredHandoff: readFastDesiredHandoff(),
+      }),
+      startupFastOverride,
       currentModel,
     });
     footerFeedback.notifyForTransition(transition, getNotifier(ctx.ui));
