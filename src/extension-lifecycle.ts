@@ -8,7 +8,7 @@ import type {
 import { FAST_COMMAND } from "./capabilities.ts";
 import { executeFastCommand } from "./fast-command.ts";
 import { DEFAULT_FAST_CONFIG, FastConfigStore, type FastConfig, type FastConfigRepository } from "./fast-config-store.ts";
-import { readFastDesiredHandoff } from "./fast-desired-handoff.ts";
+import { readFastDesiredHandoff, writeFastDesiredHandoff } from "./fast-desired-handoff.ts";
 import { FastStateEngine } from "./fast-state-engine.ts";
 import { FooterFeedback } from "./footer-feedback.ts";
 import { ServiceTierInjector } from "./service-tier-injector.ts";
@@ -142,6 +142,7 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
         config,
         currentModel: ctx.model,
         saveDesiredActive: (desiredActive) => configStore.writeDesiredActive(ctx.cwd, desiredActive),
+        writeFastDesiredHandoff,
         notify: (message, type) => notifyUi(ctx.ui, message, type),
       });
 

@@ -407,6 +407,70 @@ test("a fresh process without inherited desired handoff does not retain session-
   assert.deepEqual(freshRun.configStore.writes, []);
 });
 
+test("session-only /fast on writes desired handoff and survives same-process replacement without config writes", async () => {
+  const harness = createHarness({
+    persistState: false,
+    desiredActive: false,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+  });
+  const { ctx } = createContext({ currentModel: model("partner", "gpt-5.5") });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  await harness.commands.get("fast").handler("", ctx);
+  const [activePayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    ctx,
+  );
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const [replacementPayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    ctx,
+  );
+
+  assert.equal(process.env[FAST_DESIRED_HANDOFF_ENV], "1");
+  assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.deepEqual(replacementPayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.deepEqual(harness.configStore.writes, []);
+});
+
+test("session-only /fast off writes desired handoff and survives same-process replacement without config writes", async () => {
+  await withFastDesiredHandoffEnv("1", async () => {
+    const harness = createHarness({
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    });
+    const { ctx } = createContext({ currentModel: model("partner", "gpt-5.5") });
+
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+    await harness.commands.get("fast").handler("", ctx);
+    const [inactivePayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      ctx,
+    );
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+    const [replacementPayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      ctx,
+    );
+
+    assert.equal(process.env[FAST_DESIRED_HANDOFF_ENV], "0");
+    assert.equal(inactivePayload, undefined);
+    assert.equal(replacementPayload, undefined);
+    assert.deepEqual(harness.configStore.writes, []);
+  });
+});
+
 test("--fast loads persisted false as in-memory desired true without writing config", async () => {
   const harness = createHarness(
     {
@@ -646,6 +710,7 @@ test("lifecycle registers /fast and injects priority for an active allow-listed 
     ctx,
   );
 
+  assert.equal(process.env[FAST_DESIRED_HANDOFF_ENV], "1");
   assert.deepEqual(harness.configStore.writes, [{ cwd: "/work/repo", desiredActive: true }]);
   assert.deepEqual(requestPayload, { model: "gpt-5.5", temperature: 0.2, service_tier: "priority" });
 });
@@ -670,6 +735,7 @@ test("/fast warns when the Desired Fast State toggles but cannot be saved", asyn
     ctx,
   );
 
+  assert.equal(process.env[FAST_DESIRED_HANDOFF_ENV], "1");
   assert.deepEqual(harness.configStore.writes, [{ cwd: "/work/repo", desiredActive: true }]);
   assert.deepEqual(notifications, [{ message: FAST_COMMAND_SAVE_FAILED_MESSAGE, type: "warning" }]);
   assert.deepEqual(requestPayload, { model: "gpt-5.5", service_tier: "priority" });

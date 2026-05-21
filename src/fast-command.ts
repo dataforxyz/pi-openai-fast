@@ -14,6 +14,7 @@ export interface FastCommandDependencies {
   config: Pick<FastConfig, "persistState">;
   currentModel?: FastModelIdentity | undefined;
   saveDesiredActive(desiredActive: boolean): Promise<boolean>;
+  writeFastDesiredHandoff(desiredActive: boolean): void;
   notify(message: string, type: FastCommandNoticeType): void;
 }
 
@@ -44,6 +45,7 @@ export async function executeFastCommand(args: string, dependencies: FastCommand
     desiredActive: nextDesiredActive,
   });
   const state = transition.current;
+  dependencies.writeFastDesiredHandoff(state.desiredActive);
 
   if (dependencies.config.persistState) {
     const persisted = await dependencies.saveDesiredActive(state.desiredActive);
