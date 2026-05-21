@@ -1508,6 +1508,104 @@ test("status mode with desired handoff on publishes fast only while active", asy
   });
 });
 
+test("status mode keeps theme colors out of status text while model changes drive active state", async () => {
+  const thinkingLevels = [];
+  const harness = createHarness({
+    persistState: true,
+    desiredActive: true,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "status", vars: {}, darkFastColor: "#112233" },
+  });
+  const { ctx, footer, statusCalls, statusByKey } = createContext({
+    captureFooter: true,
+    currentModel: model("partner", "gpt-5.4"),
+    theme: createTheme({ thinkingLevels }),
+  });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const [initialPayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.4" } },
+    ctx,
+  );
+
+  await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.5") }, ctx);
+  const [activePayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    ctx,
+  );
+
+  await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.4") }, ctx);
+  const [inactivePayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.4" } },
+    ctx,
+  );
+
+  assert.deepEqual(footer.setFooterCalls, []);
+  assert.equal(initialPayload, undefined);
+  assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.equal(inactivePayload, undefined);
+  assert.deepEqual(statusCalls.at(-3), { key: FAST_STATUS_KEY, text: undefined });
+  assert.deepEqual(statusCalls.at(-2), { key: FAST_STATUS_KEY, text: "fast" });
+  assert.deepEqual(statusCalls.at(-1), { key: FAST_STATUS_KEY, text: undefined });
+  assert.equal(statusCalls.some(({ text }) => typeof text === "string" && text.includes("\x1b")), false);
+  assert.equal(statusByKey.has(FAST_STATUS_KEY), false);
+  assert.deepEqual(thinkingLevels, []);
+});
+
+test("off mode leaves footer and status output untouched while service tier follows active state", async () => {
+  const thinkingLevels = [];
+  const harness = createHarness({
+    persistState: true,
+    desiredActive: true,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "off", vars: {}, darkFastColor: "#112233" },
+  });
+  const { ctx, footer, statusByKey } = createContext({
+    captureFooter: true,
+    currentModel: model("partner", "gpt-5.4"),
+    statuses: { "other-extension": "busy" },
+    theme: createTheme({ thinkingLevels }),
+  });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const [initialPayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.4" } },
+    ctx,
+  );
+
+  await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.5") }, ctx);
+  const [activePayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    ctx,
+  );
+
+  await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.4") }, ctx);
+  const [inactivePayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.4" } },
+    ctx,
+  );
+
+  assert.deepEqual(footer.setFooterCalls, []);
+  assert.equal(initialPayload, undefined);
+  assert.deepEqual(activePayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.equal(inactivePayload, undefined);
+  assert.equal(statusByKey.has(FAST_STATUS_KEY), false);
+  assert.equal(statusByKey.get("other-extension"), "busy");
+  assert.deepEqual(thinkingLevels, []);
+});
+
 test("off mode does not install footer or publish status but still injects service tier when active", async () => {
   const harness = createHarness({
     persistState: false,

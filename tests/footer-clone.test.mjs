@@ -235,6 +235,35 @@ test("active clone sends each non-off thinking level to the thinking-border rend
   assert.deepEqual(thinkingLevels, ["minimal", "low", "medium", "high", "xhigh"]);
 });
 
+test("theme-derived active fast label preserves surrounding footer sections", () => {
+  const originalHome = process.env.HOME;
+  process.env.HOME = "/Users/alice";
+  try {
+    const thinkingLevels = [];
+    const lines = createClone({ active: true, theme: createTheme({ thinkingLevels }), thinkingLevel: "high" }).render(120);
+    const output = lines.join("\n");
+
+    assert.equal(lines.length, 3);
+    assert.match(lines[0], /~\/project \(main\) • demo-session/);
+    assert.match(output, /↑2\.0k/);
+    assert.match(output, /↓21k/);
+    assert.match(output, /R500/);
+    assert.match(output, /W40k/);
+    assert.match(output, /\$0\.124 \(sub\)/);
+    assert.match(output, /75\.2%\/200k \(auto\)/);
+    assert.match(output, /\(openai\) gpt-5\.5 .*\x1b\[38;5;147mfast\x1b\[39m\x1b\[38;5;8m • high/);
+    assert.match(output, /alpha status zeta status/);
+    assert.deepEqual(thinkingLevels, ["high"]);
+    assert.equal(lines.every((line) => visibleWidth(line) <= 120), true);
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+  }
+});
+
 test("active clone falls back to dim fast label for off, missing, unexpected, or unsupported thinking theme", () => {
   const thinkingLevels = [];
   const theme = createTheme({ thinkingLevels });
