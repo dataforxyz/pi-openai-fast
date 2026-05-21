@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fastColorToAnsi, normalizeFastColorValue, resolveFastColorValue } from "../src/fast-colors.ts";
+import {
+  fastColorToAnsi,
+  isLegacyFastLabelColorLiteral,
+  normalizeFastColorValue,
+  resolveFastColorValue,
+} from "../src/fast-colors.ts";
 
 const RESET_FOREGROUND = "\x1b[39m";
 
@@ -26,6 +31,14 @@ test("resolves fast color variables to each supported final token", () => {
   assert.equal(resolveFastColorValue("brandDefault", { brandDefault: "" }), "");
   assert.equal(normalizeFastColorValue(42), 42);
   assert.equal(normalizeFastColorValue(" 42 "), "42");
+});
+
+test("classifies only direct legacy fast label color literals", () => {
+  assert.equal(isLegacyFastLabelColorLiteral(" #FF50BE "), true);
+  assert.equal(isLegacyFastLabelColorLiteral("#d20000"), true);
+  assert.equal(isLegacyFastLabelColorLiteral("brand"), false);
+  assert.equal(isLegacyFastLabelColorLiteral(205), false);
+  assert.equal(isLegacyFastLabelColorLiteral("#123456"), false);
 });
 
 test("treats an empty fast color string as terminal default foreground", () => {

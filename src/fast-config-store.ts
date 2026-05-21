@@ -2,7 +2,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { FastColorValue } from "./fast-colors.ts";
-import { normalizeFastColorValue } from "./fast-colors.ts";
+import { isLegacyFastLabelColorLiteral, normalizeFastColorValue } from "./fast-colors.ts";
 import { emitFastWarning, warnToConsole, type FastWarning } from "./fast-warnings.ts";
 
 export const DEFAULT_SUPPORTED_MODELS = [
@@ -287,6 +287,14 @@ function sanitizeConfigRecordForWrite(source: JsonRecord, warningContext?: Confi
   return next;
 }
 
+function normalizeLoadedFastColorValue(value: unknown): FastColorValue | undefined {
+  if (isLegacyFastLabelColorLiteral(value)) {
+    return undefined;
+  }
+
+  return normalizeFastColorValue(value);
+}
+
 function mergeKnownConfig(base: FastConfig, source: JsonRecord, warningContext?: ConfigWarningContext): FastConfig {
   const next: FastConfig = {
     ...base,
@@ -312,11 +320,11 @@ function mergeKnownConfig(base: FastConfig, source: JsonRecord, warningContext?:
     if (isRecord(source.footer.vars)) {
       next.footer.vars = normalizeStringRecord(source.footer.vars);
     }
-    const darkFastColor = normalizeFastColorValue(source.footer.darkFastColor);
+    const darkFastColor = normalizeLoadedFastColorValue(source.footer.darkFastColor);
     if (darkFastColor !== undefined) {
       next.footer.darkFastColor = darkFastColor;
     }
-    const lightFastColor = normalizeFastColorValue(source.footer.lightFastColor);
+    const lightFastColor = normalizeLoadedFastColorValue(source.footer.lightFastColor);
     if (lightFastColor !== undefined) {
       next.footer.lightFastColor = lightFastColor;
     }

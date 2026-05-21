@@ -340,6 +340,124 @@ test("valid custom and variable-valued footer colors are preserved on load", asy
   });
 });
 
+test("literal legacy fast label colors are treated as unset on load", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      footer: {
+        vars: { legacyPink: "#ff50be" },
+        darkFastColor: "  #FF50BE ",
+        lightFastColor: " #D20000 ",
+      },
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).footer, {
+    ...DEFAULT_FAST_CONFIG.footer,
+    vars: { legacyPink: "#ff50be" },
+  });
+});
+
+test("variable-valued fast label overrides remain user-owned even when they resolve to legacy literals", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      footer: {
+        vars: { legacyPink: "#ff50be", legacyRed: "#d20000" },
+        darkFastColor: "legacyPink",
+        lightFastColor: "legacyRed",
+      },
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).footer, {
+    ...DEFAULT_FAST_CONFIG.footer,
+    vars: { legacyPink: "#ff50be", legacyRed: "#d20000" },
+    darkFastColor: "legacyPink",
+    lightFastColor: "legacyRed",
+  });
+});
+
+test("higher-priority legacy literals do not override lower-priority custom fast label colors", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(
+    paths.global,
+    JSON.stringify({
+      footer: {
+        darkFastColor: "#123456",
+        lightFastColor: "#654321",
+      },
+    }),
+  );
+  await writeFile(
+    paths.project,
+    JSON.stringify({
+      footer: {
+        darkFastColor: " #ff50be ",
+        lightFastColor: " #D20000 ",
+      },
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).footer, {
+    ...DEFAULT_FAST_CONFIG.footer,
+    darkFastColor: "#123456",
+    lightFastColor: "#654321",
+  });
+});
+
+test("higher-priority non-legacy literals override lower-priority legacy fast label colors", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(
+    paths.global,
+    JSON.stringify({
+      footer: {
+        darkFastColor: "#ff50be",
+        lightFastColor: "#d20000",
+      },
+    }),
+  );
+  await writeFile(
+    paths.project,
+    JSON.stringify({
+      footer: {
+        darkFastColor: "#123456",
+        lightFastColor: "#654321",
+      },
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).footer, {
+    ...DEFAULT_FAST_CONFIG.footer,
+    darkFastColor: "#123456",
+    lightFastColor: "#654321",
+  });
+});
+
 test("valid numeric and empty footer color values are preserved", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");

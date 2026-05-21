@@ -8,6 +8,7 @@ export interface FastColorFormatterOptions {
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 const INTEGER_INDEX = /^\d+$/;
 const COLOR_VAR_REFERENCE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+const LEGACY_FAST_LABEL_COLOR_LITERALS = new Set(["#ff50be", "#d20000"]);
 
 function isStringRecord(value: unknown): value is Record<string, string> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -51,6 +52,21 @@ export function normalizeFastColorValue(value: unknown): FastColorValue | undefi
   }
 
   return undefined;
+}
+
+/**
+ * Literal-only legacy color classification used by config migration.
+ *
+ * Variable names are intentionally not resolved here: a variable-valued override
+ * remains user-owned even when the variable maps to an old generated literal.
+ */
+export function isLegacyFastLabelColorLiteral(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = normalizeFastColorValue(value);
+  return typeof normalized === "string" && LEGACY_FAST_LABEL_COLOR_LITERALS.has(normalized.toLowerCase());
 }
 
 function resolveVariableRef(

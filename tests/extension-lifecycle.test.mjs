@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { FAST_STATUS_KEY } from "../src/capabilities.ts";
 import { FAST_COMMAND_SAVE_FAILED_MESSAGE } from "../src/fast-command.ts";
+import { FastConfigStore } from "../src/fast-config-store.ts";
 import { FAST_DESIRED_HANDOFF_ENV } from "../src/fast-desired-handoff.ts";
 import { registerPiOpenAIFast } from "../src/extension-lifecycle.ts";
 
@@ -15,6 +19,10 @@ const THINKING_ANSI = {
   low: "\x1b[38;5;75m",
   high: "\x1b[38;5;147m",
 };
+
+async function tempHome() {
+  return await mkdtemp(join(tmpdir(), "pi-openai-fast-lifecycle-"));
+}
 
 function createTheme(options = {}) {
   const theme = {
@@ -364,6 +372,45 @@ test("lifecycle threads valid custom fast label color config into the replacemen
 
   assert.match(output, /gpt-5\.5 .*\x1b\[38;5;17mfast\x1b\[39m\x1b\[38;5;8m • high/);
   assert.deepEqual(thinkingLevels, []);
+});
+
+test("lifecycle treats loaded literal legacy fast label colors as no custom override", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const configStore = new FastConfigStore({ home });
+  const globalPath = configStore.paths(cwd).global;
+  const thinkingLevels = [];
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      persistState: true,
+      desiredActive: true,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: {
+        mode: "replace",
+        darkFastColor: " #FF50BE ",
+        lightFastColor: " #D20000 ",
+      },
+    }),
+  );
+
+  const harness = createHarness(undefined, { configStore, thinkingLevel: "high" });
+  const { ctx, footer } = createContext({
+    cwd,
+    captureFooter: true,
+    currentModel: { provider: "partner", id: "gpt-5.5", reasoning: true, contextWindow: 200_000 },
+    theme: createTheme({ thinkingLevels }),
+  });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const output = footer.component.render(100).join("\n");
+
+  assert.match(output, /gpt-5\.5 .*\x1b\[38;5;147mfast\x1b\[39m\x1b\[38;5;8m • high/);
+  assert.deepEqual(thinkingLevels, ["high"]);
+  assert.doesNotMatch(output, /\x1b\[38;5;205mfast/);
+  assert.doesNotMatch(output, /\x1b\[38;5;160mfast/);
 });
 
 test("session startup routes config and handoff warnings to UI once for the current operation", async () => {
