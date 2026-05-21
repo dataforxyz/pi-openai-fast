@@ -366,6 +366,57 @@ test("same-process replacement reads valid desired handoff off before persisted 
   assert.deepEqual(harness.configStore.writes, []);
 });
 
+test("invalid desired handoff warns once and falls through to config-derived startup state", async () => {
+  await withFastDesiredHandoffEnv("true", async () => {
+    const nonPersistentRun = createHarness({
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    });
+    const { ctx: nonPersistentCtx, notifications: nonPersistentNotifications } = createContext({
+      currentModel: model("partner", "gpt-5.5"),
+    });
+
+    await emit(nonPersistentRun, "session_start", { type: "session_start" }, nonPersistentCtx);
+    const [nonPersistentPayload] = await emit(
+      nonPersistentRun,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      nonPersistentCtx,
+    );
+
+    const persistedRun = createHarness({
+      persistState: true,
+      desiredActive: true,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    });
+    const { ctx: persistedCtx, notifications: persistedNotifications } = createContext({
+      currentModel: model("partner", "gpt-5.5"),
+    });
+
+    await emit(persistedRun, "session_start", { type: "session_start" }, persistedCtx);
+    const [persistedPayload] = await emit(
+      persistedRun,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      persistedCtx,
+    );
+
+    const expectedWarning = {
+      message: 'Ignoring invalid PI_OPENAI_FAST_DESIRED value "true"; expected exact value 1 or 0.',
+      type: "warning",
+    };
+    assert.equal(nonPersistentPayload, undefined);
+    assert.deepEqual(persistedPayload, { model: "gpt-5.5", service_tier: "priority" });
+    assert.deepEqual(nonPersistentNotifications, [expectedWarning]);
+    assert.deepEqual(persistedNotifications, [expectedWarning]);
+    assert.deepEqual(nonPersistentRun.configStore.writes, []);
+    assert.deepEqual(persistedRun.configStore.writes, []);
+  });
+});
+
 test("a fresh process without inherited desired handoff does not retain session-only Fast intent", async () => {
   await withFastDesiredHandoffEnv("1", async () => {
     const inheritedRun = createHarness({
@@ -495,6 +546,64 @@ test("--fast loads persisted false as in-memory desired true without writing con
   assert.deepEqual(harness.configStore.writes, []);
 });
 
+test("--fast overrides inherited handoff off and seeds desired-on handoff without writing config", async () => {
+  await withFastDesiredHandoffEnv("0", async () => {
+    const harness = createHarness(
+      {
+        persistState: true,
+        desiredActive: false,
+        supportedModels: ["partner/gpt-5.5"],
+        footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+      },
+      { flags: { fast: true } },
+    );
+    const { ctx } = createContext({ currentModel: model("partner", "gpt-5.5") });
+
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+    const [requestPayload] = await emit(
+      harness,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      ctx,
+    );
+
+    assert.deepEqual(requestPayload, { model: "gpt-5.5", service_tier: "priority" });
+    assert.equal(process.env[FAST_DESIRED_HANDOFF_ENV], "1");
+    assert.deepEqual(harness.configStore.writes, []);
+  });
+});
+
+test("--fast seeds desired handoff while active state still requires a supported selected model", async () => {
+  const harness = createHarness(
+    {
+      persistState: true,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    },
+    { flags: { fast: true } },
+  );
+  const { ctx, notifications } = createContext({ currentModel: model("partner", "gpt-5.4") });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const [requestPayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.4" } },
+    ctx,
+  );
+
+  assert.equal(requestPayload, undefined);
+  assert.equal(process.env[FAST_DESIRED_HANDOFF_ENV], "1");
+  assert.deepEqual(harness.configStore.writes, []);
+  assert.deepEqual(notifications, [
+    {
+      message: "Fast Mode is requested but inactive because the current model is not supported.",
+      type: "warning",
+    },
+  ]);
+});
+
 test("--fast with no startup model keeps intent and activates after a supported model is selected", async () => {
   const harness = createHarness(
     {
@@ -538,7 +647,7 @@ test("--fast with no startup model keeps intent and activates after a supported 
   ]);
 });
 
-test("--fast does not change persisted false preference for later runs", async () => {
+test("--fast seeds handoff for descendants but does not change persisted false preference", async () => {
   const persistedConfig = {
     persistState: true,
     desiredActive: false,
@@ -555,20 +664,36 @@ test("--fast does not change persisted false preference for later runs", async (
     firstCtx,
   );
 
-  const laterRun = createHarness(persistedConfig);
-  const { ctx: laterCtx } = createContext({ currentModel: model("partner", "gpt-5.5") });
-  await emit(laterRun, "session_start", { type: "session_start" }, laterCtx);
-  const [laterPayload] = await emit(
-    laterRun,
+  const descendantRun = createHarness(persistedConfig);
+  const { ctx: descendantCtx } = createContext({ currentModel: model("partner", "gpt-5.5") });
+  await emit(descendantRun, "session_start", { type: "session_start" }, descendantCtx);
+  const [descendantPayload] = await emit(
+    descendantRun,
     "before_provider_request",
     { type: "before_provider_request", payload: { model: "gpt-5.5" } },
-    laterCtx,
+    descendantCtx,
   );
 
+  await withFastDesiredHandoffEnv(undefined, async () => {
+    const laterFreshRun = createHarness(persistedConfig);
+    const { ctx: laterFreshCtx } = createContext({ currentModel: model("partner", "gpt-5.5") });
+    await emit(laterFreshRun, "session_start", { type: "session_start" }, laterFreshCtx);
+    const [laterFreshPayload] = await emit(
+      laterFreshRun,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+      laterFreshCtx,
+    );
+
+    assert.equal(laterFreshPayload, undefined);
+    assert.deepEqual(laterFreshRun.configStore.writes, []);
+  });
+
   assert.deepEqual(firstPayload, { model: "gpt-5.5", service_tier: "priority" });
-  assert.equal(laterPayload, undefined);
+  assert.deepEqual(descendantPayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.equal(process.env[FAST_DESIRED_HANDOFF_ENV], "1");
   assert.deepEqual(firstRun.configStore.writes, []);
-  assert.deepEqual(laterRun.configStore.writes, []);
+  assert.deepEqual(descendantRun.configStore.writes, []);
 });
 
 test("/fast warns once when requested on an unsupported model and provider requests do not repeat it", async () => {

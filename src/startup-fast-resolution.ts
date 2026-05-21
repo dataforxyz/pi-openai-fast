@@ -1,9 +1,10 @@
 import type { FastConfig } from "./fast-config-store.ts";
+import type { FastDesiredHandoffReadResult } from "./fast-desired-handoff.ts";
 
 export interface StartupFastDesiredResolutionInput {
   config: Pick<FastConfig, "persistState" | "desiredActive">;
   startupFastOverride: boolean;
-  fastDesiredHandoff: boolean | undefined;
+  fastDesiredHandoff: FastDesiredHandoffReadResult;
 }
 
 export function resolveStartupDesiredActive(input: StartupFastDesiredResolutionInput): boolean {
@@ -11,8 +12,8 @@ export function resolveStartupDesiredActive(input: StartupFastDesiredResolutionI
     return true;
   }
 
-  if (input.fastDesiredHandoff !== undefined) {
-    return input.fastDesiredHandoff;
+  if (input.fastDesiredHandoff.kind === "valid") {
+    return input.fastDesiredHandoff.desiredActive;
   }
 
   return input.config.persistState ? input.config.desiredActive : false;

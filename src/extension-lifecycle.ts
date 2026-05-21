@@ -8,7 +8,11 @@ import type {
 import { FAST_COMMAND } from "./capabilities.ts";
 import { executeFastCommand } from "./fast-command.ts";
 import { DEFAULT_FAST_CONFIG, FastConfigStore, type FastConfig, type FastConfigRepository } from "./fast-config-store.ts";
-import { readFastDesiredHandoff, writeFastDesiredHandoff } from "./fast-desired-handoff.ts";
+import {
+  readFastDesiredHandoff,
+  writeFastDesiredHandoff,
+  type FastDesiredHandoffInvalidValueWarning,
+} from "./fast-desired-handoff.ts";
 import { FastStateEngine } from "./fast-state-engine.ts";
 import { FooterFeedback } from "./footer-feedback.ts";
 import { ServiceTierInjector } from "./service-tier-injector.ts";
@@ -85,6 +89,22 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
     ui?.notify?.(message, type);
   }
 
+  function warnForInvalidFastDesiredHandoff(
+    warning: FastDesiredHandoffInvalidValueWarning,
+    ui: ExtensionContext["ui"] | undefined,
+  ): void {
+    try {
+      if (typeof ui?.notify === "function") {
+        ui.notify(warning.message, "warning");
+        return;
+      }
+
+      console.warn(`[pi-openai-fast] ${warning.message}`);
+    } catch {
+      // Warning delivery must not make startup fail.
+    }
+  }
+
   function syncFooter(ctx: ExtensionContext, currentModel = ctx.model): void {
     footerFeedback.syncFooterMode(currentConfig.footer.mode, getUiForFooterFeedback(ctx.ui), {
       context: {
@@ -110,12 +130,19 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
     currentConfig = await configStore.load(ctx.cwd);
     configLoaded = true;
     const startupFastOverride = isStartupFastOverrideRequested(pi);
+    const fastDesiredHandoff = readFastDesiredHandoff();
+    if (fastDesiredHandoff.kind === "invalid") {
+      warnForInvalidFastDesiredHandoff(fastDesiredHandoff.warning, ctx.ui);
+    }
+    if (startupFastOverride) {
+      writeFastDesiredHandoff(true);
+    }
     const transition = stateEngine.transition({
       supportedModels: currentConfig.supportedModels,
       desiredActive: resolveStartupDesiredActive({
         config: currentConfig,
         startupFastOverride,
-        fastDesiredHandoff: readFastDesiredHandoff(),
+        fastDesiredHandoff,
       }),
       startupFastOverride,
       currentModel,
