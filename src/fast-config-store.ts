@@ -43,7 +43,10 @@ export type FastConfigWarningCode =
   | "config-read-failed"
   | "config-default-write-failed"
   | "config-write-failed"
-  | "config-malformed-write-refused";
+  | "config-malformed-write-refused"
+  | "config-supported-models-not-array"
+  | "config-supported-models-dropped"
+  | "config-supported-models-all-invalid";
 
 export interface FastConfigWarning {
   code: FastConfigWarningCode;
@@ -70,6 +73,18 @@ interface FastConfigPaths {
 }
 
 type JsonRecord = Record<string, unknown>;
+
+interface ConfigWarningContext {
+  path: string;
+  warn: FastConfigWarningSink;
+}
+
+interface SupportedModelsNormalizationResult {
+  supportedModels: string[] | undefined;
+  invalidEntries: unknown[];
+  allInvalid: boolean;
+  notArray: boolean;
+}
 
 function defaultFastConfig(): FastConfig {
   return {
@@ -107,6 +122,10 @@ function isFooterMode(value: unknown): value is FooterMode {
   return value === "replace" || value === "status" || value === "off";
 }
 
+function containsPatternIntentMetacharacter(value: string): boolean {
+  return /[\*\[\]\(\)\{\}\?\+\|\^\$\\]/.test(value);
+}
+
 function normalizeSupportedModelEntry(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -119,7 +138,8 @@ function normalizeSupportedModelEntry(value: unknown): string | undefined {
     trimmed.length === 0 ||
     /\s/.test(trimmed) ||
     separatorIndex <= 0 ||
-    separatorIndex === trimmed.length - 1
+    separatorIndex === trimmed.length - 1 ||
+    containsPatternIntentMetacharacter(trimmed)
   ) {
     return undefined;
   }
@@ -127,15 +147,29 @@ function normalizeSupportedModelEntry(value: unknown): string | undefined {
   return trimmed;
 }
 
-function normalizeSupportedModels(value: unknown): string[] | undefined {
+function normalizeSupportedModels(value: unknown): SupportedModelsNormalizationResult {
   if (!Array.isArray(value)) {
-    return undefined;
+    return { supportedModels: undefined, invalidEntries: [], allInvalid: false, notArray: true };
   }
 
-  return value.flatMap((entry) => {
+  const supportedModels: string[] = [];
+  const invalidEntries: unknown[] = [];
+
+  for (const entry of value) {
     const normalized = normalizeSupportedModelEntry(entry);
-    return normalized === undefined ? [] : [normalized];
-  });
+    if (normalized === undefined) {
+      invalidEntries.push(entry);
+    } else {
+      supportedModels.push(normalized);
+    }
+  }
+
+  return {
+    supportedModels,
+    invalidEntries,
+    allInvalid: value.length > 0 && supportedModels.length === 0,
+    notArray: false,
+  };
 }
 
 function parseJsonRecord(text: string): JsonRecord {
@@ -206,7 +240,7 @@ function sanitizeFooterRecordForWrite(source: JsonRecord): JsonRecord {
   return next;
 }
 
-function sanitizeConfigRecordForWrite(source: JsonRecord): JsonRecord {
+function sanitizeConfigRecordForWrite(source: JsonRecord, warningContext?: ConfigWarningContext): JsonRecord {
   const next: JsonRecord = { ...source };
 
   delete next.active;
@@ -221,8 +255,9 @@ function sanitizeConfigRecordForWrite(source: JsonRecord): JsonRecord {
 
   if (hasOwnField(next, "supportedModels")) {
     const supportedModels = normalizeSupportedModels(next.supportedModels);
-    if (supportedModels) {
-      next.supportedModels = supportedModels;
+    emitSupportedModelsWarnings(supportedModels, warningContext);
+    if (supportedModels.supportedModels !== undefined) {
+      next.supportedModels = supportedModels.supportedModels;
     } else {
       delete next.supportedModels;
     }
@@ -239,7 +274,7 @@ function sanitizeConfigRecordForWrite(source: JsonRecord): JsonRecord {
   return next;
 }
 
-function mergeKnownConfig(base: FastConfig, source: JsonRecord): FastConfig {
+function mergeKnownConfig(base: FastConfig, source: JsonRecord, warningContext?: ConfigWarningContext): FastConfig {
   const next: FastConfig = {
     ...base,
     supportedModels: [...base.supportedModels],
@@ -250,9 +285,12 @@ function mergeKnownConfig(base: FastConfig, source: JsonRecord): FastConfig {
     next.persistState = source.persistState;
   }
   next.desiredActive = migratedDesiredActive(source, next.desiredActive);
-  const supportedModels = normalizeSupportedModels(source.supportedModels);
-  if (supportedModels) {
-    next.supportedModels = supportedModels;
+  if (hasOwnField(source, "supportedModels")) {
+    const supportedModels = normalizeSupportedModels(source.supportedModels);
+    emitSupportedModelsWarnings(supportedModels, warningContext);
+    if (supportedModels.supportedModels !== undefined) {
+      next.supportedModels = supportedModels.supportedModels;
+    }
   }
   if (isRecord(source.footer)) {
     if (isFooterMode(source.footer.mode)) {
@@ -288,6 +326,45 @@ function emitWarning(warn: FastConfigWarningSink, warning: FastConfigWarning): v
     warn(warning);
   } catch {
     // A warning sink should not turn config fallback into a startup failure.
+  }
+}
+
+function describeWarningValue(value: unknown): string {
+  const json = JSON.stringify(value);
+  return json === undefined ? String(value) : json;
+}
+
+function emitSupportedModelsWarnings(
+  result: SupportedModelsNormalizationResult,
+  warningContext: ConfigWarningContext | undefined,
+): void {
+  if (warningContext === undefined) {
+    return;
+  }
+
+  if (result.notArray) {
+    emitWarning(warningContext.warn, {
+      code: "config-supported-models-not-array",
+      path: warningContext.path,
+      message: `Ignored supportedModels at ${warningContext.path} because it must be an array of provider/model strings.`,
+    });
+    return;
+  }
+
+  if (result.invalidEntries.length > 0) {
+    emitWarning(warningContext.warn, {
+      code: "config-supported-models-dropped",
+      path: warningContext.path,
+      message: `Ignored invalid supportedModels entries at ${warningContext.path}: ${result.invalidEntries.map(describeWarningValue).join(", ")}.`,
+    });
+  }
+
+  if (result.allInvalid) {
+    emitWarning(warningContext.warn, {
+      code: "config-supported-models-all-invalid",
+      path: warningContext.path,
+      message: `All supportedModels entries at ${warningContext.path} were invalid; Fast Mode has no supported models from that config layer.`,
+    });
   }
 }
 
@@ -402,11 +479,11 @@ export class FastConfigStore implements FastConfigRepository {
     }
 
     if (globalConfig.kind === "loaded") {
-      config = mergeKnownConfig(config, globalConfig.record);
+      config = mergeKnownConfig(config, globalConfig.record, { path: paths.global, warn: this.warn });
     }
 
     if (projectConfig.kind === "loaded") {
-      config = mergeKnownConfig(config, projectConfig.record);
+      config = mergeKnownConfig(config, projectConfig.record, { path: paths.project, warn: this.warn });
     }
 
     return config;
@@ -421,7 +498,7 @@ export class FastConfigStore implements FastConfigRepository {
       return false;
     }
 
-    const next = sanitizeConfigRecordForWrite(rawRecordForWrite(existing));
+    const next = sanitizeConfigRecordForWrite(rawRecordForWrite(existing), { path: target, warn: this.warn });
     next.desiredActive = desiredActive;
 
     return await writeConfigRecord(target, next, this.warn, "config-write-failed");

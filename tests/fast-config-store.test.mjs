@@ -86,10 +86,11 @@ test("merges defaults before global config and project config overrides global c
   });
 });
 
-test("normalizes supported model entries and ignores invalid entries", async () => {
+test("normalizes supported model entries and warns about dropped invalid entries", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");
-  const store = new FastConfigStore({ home });
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
   const globalPath = store.paths(cwd).global;
 
   await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
@@ -98,18 +99,67 @@ test("normalizes supported model entries and ignores invalid entries", async () 
     JSON.stringify({
       supportedModels: [
         " openai/gpt-5.5 ",
+        " openai/gpt-5.4 ",
         "",
         "   ",
         "missing-slash",
         "/missing-provider",
         "missing-id/",
+        "openai/gpt-*",
+        "openai/gpt-5.*",
+        "openai/gpt 5.5",
         123,
         null,
       ],
     }),
   );
 
-  assert.deepEqual((await store.load(cwd)).supportedModels, ["openai/gpt-5.5"]);
+  assert.deepEqual((await store.load(cwd)).supportedModels, ["openai/gpt-5.5", "openai/gpt-5.4"]);
+  assert.deepEqual(
+    warnings.map(({ code, path }) => ({ code, path })),
+    [{ code: "config-supported-models-dropped", path: globalPath }],
+  );
+  assert.match(warnings[0].message, /openai\/gpt-\*/);
+  assert.match(warnings[0].message, /openai\/gpt-5\.\*/);
+});
+
+test("warns when a non-empty supportedModels list has no valid entries", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      supportedModels: ["", "missing-slash", "openai/gpt-*", 123],
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).supportedModels, []);
+  assert.deepEqual(
+    warnings.map(({ code, path }) => ({ code, path })),
+    [
+      { code: "config-supported-models-dropped", path: globalPath },
+      { code: "config-supported-models-all-invalid", path: globalPath },
+    ],
+  );
+});
+
+test("accepts explicit empty supportedModels without warning", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(globalPath, JSON.stringify({ supportedModels: [] }));
+
+  assert.deepEqual((await store.load(cwd)).supportedModels, []);
+  assert.deepEqual(warnings, []);
 });
 
 test("uses legacy active only when desiredActive is missing", async () => {
@@ -164,7 +214,8 @@ test("writes desiredActive to an existing project config and omits legacy active
 test("preserves unknown fields while sanitizing invalid known fields on writes", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");
-  const store = new FastConfigStore({ home });
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
   const projectPath = store.paths(cwd).project;
 
   await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
@@ -198,6 +249,10 @@ test("preserves unknown fields while sanitizing invalid known fields on writes",
     },
     unknownTop: { keep: true },
   });
+  assert.deepEqual(
+    warnings.map(({ code, path }) => ({ code, path })),
+    [{ code: "config-supported-models-dropped", path: projectPath }],
+  );
 });
 
 test("falls back to defaults and warns when config cannot be read", async () => {
@@ -300,7 +355,8 @@ test("valid string color indexes are normalized on writes while footer siblings 
 test("invalid known config values fall back without losing valid nested siblings", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");
-  const store = new FastConfigStore({ home });
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
   const globalPath = store.paths(cwd).global;
 
   await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
@@ -328,6 +384,10 @@ test("invalid known config values fall back without losing valid nested siblings
       lightFastColor: "#010101",
     },
   });
+  assert.deepEqual(
+    warnings.map(({ code, path }) => ({ code, path })),
+    [{ code: "config-supported-models-not-array", path: globalPath }],
+  );
 });
 
 test("refuses malformed selected project config writes without falling back to global", async () => {
