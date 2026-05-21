@@ -1,0 +1,45 @@
+{
+  "name": "pi-openai-fast",
+  "version": "0.0.0",
+  "description": "Focused Pi extension for OpenAI Fast Mode priority service-tier requests.",
+  "keywords": [
+    "fast",
+    "openai",
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "priority",
+    "service-tier"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/studioarray/pi-openai-fast.git"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "scripts": {
+    "check": "npm run typecheck && npm test",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.75.3",
+    "@earendil-works/pi-coding-agent": ">=0.75.3",
+    "@earendil-works/pi-tui": ">=0.75.3"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3"
+  }
+}

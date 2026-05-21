@@ -1,0 +1,501 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { DEFAULT_FAST_CONFIG, FastConfigStore } from "../src/fast-config-store.ts";
+
+async function tempHome() {
+  return await mkdtemp(join(tmpdir(), "pi-openai-fast-"));
+}
+
+test("default config matches the PRD config contract", () => {
+  assert.deepEqual(DEFAULT_FAST_CONFIG, {
+    persistState: false,
+    desiredActive: false,
+    supportedModels: [
+      "openai/gpt-5.4",
+      "openai/gpt-5.5",
+      "openai-codex/gpt-5.4",
+      "openai-codex/gpt-5.5",
+    ],
+    footer: {
+      mode: "replace",
+      vars: {},
+      darkFastColor: "#ff50be",
+      lightFastColor: "#d20000",
+    },
+  });
+});
+
+test("uses the required global and project config paths", () => {
+  const store = new FastConfigStore({ home: "/home/user" });
+
+  assert.deepEqual(store.paths("/work/repo"), {
+    project: join("/work/repo", ".pi", "extensions", "pi-openai-fast.json"),
+    global: join("/home/user", ".pi", "agent", "extensions", "pi-openai-fast.json"),
+  });
+});
+
+test("creates global defaults when no config file exists", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+
+  assert.deepEqual(await store.load(cwd), DEFAULT_FAST_CONFIG);
+  assert.deepEqual(JSON.parse(await readFile(globalPath, "utf8")), DEFAULT_FAST_CONFIG);
+});
+
+test("merges defaults before global config and project config overrides global config", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(
+    paths.global,
+    JSON.stringify({
+      persistState: false,
+      desiredActive: true,
+      supportedModels: [" global/model "],
+      footer: { mode: "status" },
+    }),
+  );
+  await writeFile(
+    paths.project,
+    JSON.stringify({
+      desiredActive: false,
+      supportedModels: [],
+      footer: { darkFastColor: "#abcdef" },
+    }),
+  );
+
+  assert.deepEqual(await store.load(cwd), {
+    persistState: false,
+    desiredActive: false,
+    supportedModels: [],
+    footer: {
+      mode: "status",
+      vars: {},
+      darkFastColor: "#abcdef",
+      lightFastColor: "#d20000",
+    },
+  });
+});
+
+test("normalizes supported model entries and ignores invalid entries", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      supportedModels: [
+        " openai/gpt-5.5 ",
+        "",
+        "   ",
+        "missing-slash",
+        "/missing-provider",
+        "missing-id/",
+        123,
+        null,
+      ],
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).supportedModels, ["openai/gpt-5.5"]);
+});
+
+test("uses legacy active only when desiredActive is missing", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(paths.global, JSON.stringify({ active: true }));
+  assert.equal((await store.load(cwd)).desiredActive, true);
+
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(paths.project, JSON.stringify({ desiredActive: false, active: true }));
+  assert.equal((await store.load(cwd)).desiredActive, false);
+});
+
+test("creates global defaults with desiredActive when writing without an existing config", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+
+  await store.writeDesiredActive(cwd, true);
+
+  assert.deepEqual(JSON.parse(await readFile(globalPath, "utf8")), {
+    ...DEFAULT_FAST_CONFIG,
+    desiredActive: true,
+  });
+});
+
+test("writes desiredActive to an existing project config and omits legacy active", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(paths.global, JSON.stringify({ desiredActive: false }));
+  await writeFile(paths.project, JSON.stringify({ desiredActive: false, active: true, projectOnly: true }));
+
+  await store.writeDesiredActive(cwd, true);
+
+  assert.deepEqual(JSON.parse(await readFile(paths.global, "utf8")), { desiredActive: false });
+  assert.deepEqual(JSON.parse(await readFile(paths.project, "utf8")), {
+    desiredActive: true,
+    projectOnly: true,
+  });
+});
+
+test("preserves unknown fields while sanitizing invalid known fields on writes", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const projectPath = store.paths(cwd).project;
+
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(
+    projectPath,
+    JSON.stringify({
+      persistState: "yes",
+      desiredActive: "no",
+      active: true,
+      supportedModels: [" partner/gpt-5.5 ", 7, "missing-slash"],
+      footer: {
+        mode: "invalid",
+        vars: { brand: "#fff", invalid: 7 },
+        darkFastColor: "definitely not a color",
+        lightFastColor: "#010101",
+        unknownFooter: { keep: true },
+      },
+      unknownTop: { keep: true },
+    }),
+  );
+
+  await store.writeDesiredActive(cwd, true);
+
+  assert.deepEqual(JSON.parse(await readFile(projectPath, "utf8")), {
+    desiredActive: true,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: {
+      vars: { brand: "#fff" },
+      lightFastColor: "#010101",
+      unknownFooter: { keep: true },
+    },
+    unknownTop: { keep: true },
+  });
+});
+
+test("falls back to defaults and warns when config cannot be read", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(globalPath, "{not-json");
+
+  assert.deepEqual(await store.load(cwd), DEFAULT_FAST_CONFIG);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].code, "config-read-failed");
+  assert.equal(warnings[0].path, globalPath);
+});
+
+test("invalid string footer colors fall back on load while valid color siblings remain", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      footer: {
+        mode: "status",
+        vars: { brand: "#123456" },
+        darkFastColor: "definitely not a color",
+        lightFastColor: "brand",
+      },
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).footer, {
+    mode: "status",
+    vars: { brand: "#123456" },
+    darkFastColor: DEFAULT_FAST_CONFIG.footer.darkFastColor,
+    lightFastColor: "brand",
+  });
+});
+
+test("valid numeric and empty footer color values are preserved", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      footer: {
+        darkFastColor: 123,
+        lightFastColor: "",
+      },
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).footer, {
+    ...DEFAULT_FAST_CONFIG.footer,
+    darkFastColor: 123,
+    lightFastColor: "",
+  });
+});
+
+test("valid string color indexes are normalized on writes while footer siblings are preserved", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const projectPath = store.paths(cwd).project;
+
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(
+    projectPath,
+    JSON.stringify({
+      footer: {
+        darkFastColor: " 42 ",
+        lightFastColor: "",
+        unknownFooter: { keep: true },
+      },
+    }),
+  );
+
+  await store.writeDesiredActive(cwd, true);
+
+  assert.deepEqual(JSON.parse(await readFile(projectPath, "utf8")), {
+    desiredActive: true,
+    footer: {
+      darkFastColor: "42",
+      lightFastColor: "",
+      unknownFooter: { keep: true },
+    },
+  });
+});
+
+test("invalid known config values fall back without losing valid nested siblings", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      persistState: "yes",
+      desiredActive: "no",
+      active: true,
+      supportedModels: "openai/gpt-5.5",
+      footer: {
+        mode: "invalid",
+        vars: { brand: "#fff", invalid: 7 },
+        darkFastColor: "definitely not a color",
+        lightFastColor: "#010101",
+      },
+    }),
+  );
+
+  assert.deepEqual(await store.load(cwd), {
+    ...DEFAULT_FAST_CONFIG,
+    footer: {
+      ...DEFAULT_FAST_CONFIG.footer,
+      vars: { brand: "#fff" },
+      lightFastColor: "#010101",
+    },
+  });
+});
+
+test("writes a footer color update without changing unrelated footer fields", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(paths.global, JSON.stringify({ desiredActive: false, globalOnly: true }));
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(
+    paths.project,
+    JSON.stringify({
+      desiredActive: false,
+      persistState: true,
+      footer: {
+        mode: "replace",
+        vars: { brand: "#ff0" },
+        darkFastColor: "42",
+        lightFastColor: "88",
+      },
+      note: { keep: true },
+    }),
+  );
+
+  const saved = await store.writeSettings(cwd, {
+    darkFastColor: "007",
+  });
+
+  assert.equal(saved, true);
+  assert.deepEqual(JSON.parse(await readFile(paths.project, "utf8")), {
+    desiredActive: false,
+    persistState: true,
+    footer: {
+      mode: "replace",
+      vars: { brand: "#ff0" },
+      darkFastColor: "007",
+      lightFastColor: "88",
+    },
+    note: { keep: true },
+  });
+});
+
+test("warns instead of throwing when a config write fails", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const projectPath = store.paths(cwd).project;
+
+  await mkdir(projectPath, { recursive: true });
+
+  const saved = await store.writeDesiredActive(cwd, true);
+
+  assert.equal(saved, false);
+  assert.ok(warnings.some((warning) => warning.code === "config-write-failed" && warning.path === projectPath));
+});
+
+test("writes desiredActive to the config target without changing other persisted fields", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const globalPath = store.paths(cwd).global;
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify(
+      {
+        persistState: true,
+        desiredActive: false,
+        supportedModels: ["partner/gpt-5.5"],
+        footer: { mode: "status", vars: { brand: "#fff" } },
+        unknown: { keep: true },
+      },
+      null,
+      2,
+    ),
+  );
+
+  await store.writeDesiredActive(cwd, true);
+
+  assert.deepEqual(JSON.parse(await readFile(globalPath, "utf8")), {
+    persistState: true,
+    desiredActive: true,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "status", vars: { brand: "#fff" } },
+    unknown: { keep: true },
+  });
+});
+
+test("writes settings updates to an existing project config while preserving unrelated and footer fields", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(paths.global, JSON.stringify({ desiredActive: false, globalOnly: true }));
+  await writeFile(
+    paths.project,
+    JSON.stringify({
+      persistState: true,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: {
+        mode: "replace",
+        vars: { brand: "#fff" },
+        darkFastColor: "#111111",
+        unknownFooter: { keep: true },
+      },
+      projectOnly: { keep: true },
+    }),
+  );
+
+  const saved = await store.writeSettings(cwd, {
+    persistState: false,
+    desiredActive: true,
+    footerMode: "status",
+  });
+
+  assert.equal(saved, true);
+  assert.deepEqual(JSON.parse(await readFile(paths.global, "utf8")), { desiredActive: false, globalOnly: true });
+  assert.deepEqual(JSON.parse(await readFile(paths.project, "utf8")), {
+    persistState: false,
+    desiredActive: true,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: {
+      mode: "status",
+      vars: { brand: "#fff" },
+      darkFastColor: "#111111",
+      unknownFooter: { keep: true },
+    },
+    projectOnly: { keep: true },
+  });
+});
+
+test("writes settings updates to global config when no project config exists", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const store = new FastConfigStore({ home });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(paths.global, JSON.stringify({ persistState: true, desiredActive: false, globalOnly: true }));
+
+  const saved = await store.writeSettings(cwd, { persistState: false });
+
+  assert.equal(saved, true);
+  assert.deepEqual(JSON.parse(await readFile(paths.global, "utf8")), {
+    persistState: false,
+    desiredActive: false,
+    globalOnly: true,
+  });
+});
+
+test("reports settings write failures without saving a changed config", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const projectPath = store.paths(cwd).project;
+
+  await mkdir(projectPath, { recursive: true });
+
+  const saved = await store.writeSettings(cwd, { desiredActive: true });
+
+  assert.equal(saved, false);
+  assert.ok(warnings.some((warning) => warning.code === "config-write-failed" && warning.path === projectPath));
+});
