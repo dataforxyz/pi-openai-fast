@@ -45,6 +45,22 @@ class MemoryConfigStore {
   }
 }
 
+class DelayedConfigStore extends MemoryConfigStore {
+  constructor(config, options = {}) {
+    super(config, options);
+    this.loadCalls = [];
+    this.loadGate = new Promise((resolve) => {
+      this.resolveLoad = resolve;
+    });
+  }
+
+  async load(cwd, options = {}) {
+    this.loadCalls.push({ cwd });
+    await this.loadGate;
+    return await super.load(cwd, options);
+  }
+}
+
 function model(provider, id) {
   return { provider, id };
 }
@@ -131,11 +147,13 @@ function createHarness(config, options = {}) {
   const handlers = new Map();
   const flags = new Map();
   const flagValues = new Map(Object.entries(options.flags ?? {}));
-  const configStore = new MemoryConfigStore(config, {
-    desiredActiveWriteResult: options.desiredActiveWriteResult,
-    loadWarnings: options.loadWarnings,
-    writeWarnings: options.writeWarnings,
-  });
+  const configStore =
+    options.configStore ??
+    new MemoryConfigStore(config, {
+      desiredActiveWriteResult: options.desiredActiveWriteResult,
+      loadWarnings: options.loadWarnings,
+      writeWarnings: options.writeWarnings,
+    });
   const pi = {
     registerCommand(name, options) {
       commands.set(name, options);
@@ -359,6 +377,90 @@ test("warning sink failures do not fail startup or command handling", async () =
   await assert.doesNotReject(async () => {
     await harness.commands.get("fast").handler("", ctx);
   });
+});
+
+test("concurrent startup and model selection share config IO while applying event-specific state", async () => {
+  const loadWarning = {
+    code: "config-read-failed",
+    path: "/work/repo/.pi/extensions/pi-openai-fast.json",
+    message: "Loaded fallback Fast config.",
+  };
+  const config = {
+    persistState: true,
+    desiredActive: true,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "status", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+  };
+  const configStore = new DelayedConfigStore(config, { loadWarnings: [loadWarning] });
+  const harness = createHarness(config, { configStore });
+  const { ctx: startupCtx, notifications: startupNotifications } = createContext({
+    currentModel: model("partner", "gpt-5.4"),
+  });
+  const {
+    ctx: selectedCtx,
+    notifications: selectedNotifications,
+    statusByKey,
+  } = createContext({ currentModel: model("partner", "gpt-5.4") });
+
+  const startup = emit(harness, "session_start", { type: "session_start" }, startupCtx);
+  assert.equal(configStore.loadCalls.length, 1);
+
+  const modelSelection = emit(
+    harness,
+    "model_select",
+    { type: "model_select", model: model("partner", "gpt-5.5") },
+    selectedCtx,
+  );
+  assert.equal(configStore.loadCalls.length, 1);
+
+  configStore.resolveLoad();
+  await Promise.all([startup, modelSelection]);
+  const [requestPayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    selectedCtx,
+  );
+
+  assert.deepEqual(requestPayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.equal(statusByKey.get(FAST_STATUS_KEY), "fast");
+  assert.equal(startupNotifications.filter(({ message }) => message === loadWarning.message).length, 1);
+  assert.equal(selectedNotifications.filter(({ message }) => message === loadWarning.message).length, 1);
+
+  await emit(harness, "model_select", { type: "model_select", model: model("partner", "gpt-5.4") }, selectedCtx);
+  assert.equal(configStore.loadCalls.length, 1);
+});
+
+test("concurrent command handling shares config IO before applying command-specific state", async () => {
+  const config = {
+    persistState: false,
+    desiredActive: false,
+    supportedModels: ["partner/gpt-5.5"],
+    footer: { mode: "status", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+  };
+  const configStore = new DelayedConfigStore(config);
+  const harness = createHarness(config, { configStore });
+  const { ctx: startupCtx } = createContext({ currentModel: model("partner", "gpt-5.4") });
+  const { ctx: commandCtx, statusByKey } = createContext({ currentModel: model("partner", "gpt-5.5") });
+
+  const startup = emit(harness, "session_start", { type: "session_start" }, startupCtx);
+  assert.equal(configStore.loadCalls.length, 1);
+
+  const command = harness.commands.get("fast").handler("", commandCtx);
+  assert.equal(configStore.loadCalls.length, 1);
+
+  configStore.resolveLoad();
+  await Promise.all([startup, command]);
+  const [requestPayload] = await emit(
+    harness,
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "gpt-5.5" } },
+    commandCtx,
+  );
+
+  assert.deepEqual(requestPayload, { model: "gpt-5.5", service_tier: "priority" });
+  assert.equal(statusByKey.get(FAST_STATUS_KEY), "fast");
+  assert.equal(process.env[FAST_DESIRED_HANDOFF_ENV], "1");
 });
 
 test("same-process replacement reads valid desired handoff on before non-persistent config defaults", async () => {

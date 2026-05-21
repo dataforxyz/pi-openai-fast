@@ -6,6 +6,7 @@ import type {
   ExtensionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { FAST_COMMAND } from "./capabilities.ts";
+import { ConfigLoadCoordinator } from "./config-load-coordination.ts";
 import { executeFastCommand, FAST_COMMAND_SAVE_FAILED_MESSAGE } from "./fast-command.ts";
 import {
   DEFAULT_FAST_CONFIG,
@@ -59,8 +60,7 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
 
   registerStartupFastOverrideFlag(pi);
 
-  let configLoaded = false;
-  let currentConfig = cloneDefaultConfig();
+  const configLoadCoordinator = new ConfigLoadCoordinator(cloneDefaultConfig(), configStore);
 
   function notifyUi(ui: ExtensionContext["ui"] | undefined, message: string, type: "info" | "warning" | "error"): void {
     try {
@@ -96,6 +96,8 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
   }
 
   function syncFooter(ctx: ExtensionContext, currentModel = ctx.model): void {
+    const currentConfig = configLoadCoordinator.current;
+
     footerFeedback.syncFooterMode(currentConfig.footer.mode, getUiForFooterFeedback(ctx.ui), {
       context: {
         model: currentModel,
@@ -117,15 +119,15 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
     ctx: ExtensionContext,
     currentModel = ctx.model,
   ): Promise<FastConfig> {
+    const loadedConfig = await configLoadCoordinator.load(ctx.cwd);
+    const currentConfig = loadedConfig.config;
     const warningCollector = createFastWarningCollector();
-    currentConfig = await configStore.load(ctx.cwd, { warn: warningCollector.collect });
-    configLoaded = true;
     const startupFastOverride = isStartupFastOverrideRequested(pi);
     const fastDesiredHandoff = readFastDesiredHandoff();
     if (fastDesiredHandoff.kind === "invalid") {
       warningCollector.collect(fastDesiredHandoff.warning);
     }
-    deliverFastWarnings(warningCollector.warnings, ctx.ui);
+    deliverFastWarnings([...loadedConfig.warnings, ...warningCollector.warnings], ctx.ui);
     if (startupFastOverride) {
       writeFastDesiredHandoff(true);
     }
@@ -145,11 +147,11 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
   }
 
   async function ensureConfig(ctx: ExtensionContext): Promise<FastConfig> {
-    if (!configLoaded) {
+    if (!configLoadCoordinator.isLoaded) {
       return await loadConfig(ctx);
     }
 
-    return currentConfig;
+    return configLoadCoordinator.current;
   }
 
   pi.registerCommand(FAST_COMMAND, {
@@ -178,7 +180,10 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
       deliverFastWarnings(warningCollector.warnings, ctx.ui);
 
       if (result.kind === "toggled") {
-        currentConfig = { ...currentConfig, desiredActive: result.state.desiredActive };
+        configLoadCoordinator.updateCurrent({
+          ...configLoadCoordinator.current,
+          desiredActive: result.state.desiredActive,
+        });
         footerFeedback.notifyForTransition(result.transition, getNotifier(ctx.ui));
         syncFooter(ctx);
       }
@@ -194,7 +199,7 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
   });
 
   pi.on("model_select", async (event: ModelSelectEvent, ctx: ExtensionContext) => {
-    if (!configLoaded) {
+    if (!configLoadCoordinator.isLoaded) {
       await loadConfig(ctx, event.model);
       return;
     }
@@ -205,7 +210,7 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
   });
 
   pi.on("thinking_level_select", (_event, ctx: ExtensionContext) => {
-    if (configLoaded) {
+    if (configLoadCoordinator.isLoaded) {
       syncFooter(ctx);
     }
   });
