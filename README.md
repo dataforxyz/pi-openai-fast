@@ -66,12 +66,12 @@ Default config:
   ],
   "footer": {
     "mode": "replace",
-    "vars": {},
-    "darkFastColor": "#ff50be",
-    "lightFastColor": "#d20000"
+    "vars": {}
   }
 }
 ```
+
+The default shape intentionally omits `footer.darkFastColor` and `footer.lightFastColor`. Missing color fields mean there is no **Fast Label Color Override**.
 
 `supportedModels` controls which models are **Supported Models**:
 
@@ -82,15 +82,48 @@ Default config:
 
 `footer.mode` values:
 
-- `replace` installs the Footer Clone and shows inline `fast` after the model name only while Fast Mode is active.
-- `status` leaves Pi's footer in place and publishes only a plain `fast` status indicator while active.
-- `off` leaves footer/status UI untouched.
+- `replace` installs the extension-owned Footer Clone and shows inline `fast` after the model name only while **Active Fast State** is true.
+- `status` leaves Pi's footer in place and publishes only a plain `fast` status indicator while active. It does not apply **Theme-Matched Fast Label Color** or color overrides.
+- `off` leaves footer/status UI untouched. Service-tier injection still follows **Active Fast State** independently of footer mode.
 
-Fast colors accept six-digit hex values, 256-color indexes, variable references from `footer.vars`, or an empty string for the terminal default foreground. Pi's built-in `light` theme uses `lightFastColor`; other themes use `darkFastColor`.
+## Fast label colors
+
+In `replace` mode, an active **Fast Label** uses **Theme-Matched Fast Label Color** by default. For thinking levels `minimal`, `low`, `medium`, `high`, and `xhigh`, the label is rendered with Pi's current thinking-border color. Thinking `off`, missing or unexpected thinking levels, and missing theme support fall back to the surrounding dim footer styling. The old pink/red literals are not active defaults.
+
+Advanced users can opt in to a **Fast Label Color Override** by setting `footer.darkFastColor` and/or `footer.lightFastColor`. Valid override values are:
+
+- six-digit hex strings such as `"#112233"`
+- 256-color indexes as numbers or numeric strings, such as `42` or `"42"`
+- variable references from `footer.vars`, including nested variables
+- an empty string `""` to request the terminal default foreground
+
+Theme selection is explicit: Pi theme name `light` selects `lightFastColor`; every other theme name selects `darkFastColor`. If the selected theme-specific override is absent or invalid, the extension uses **Theme-Matched Fast Label Color** instead of falling back to the sibling override.
+
+Invalid override values, missing variables, and circular variables are ignored and reported through the normal config warning paths when the config layer can be validated. A lower-priority valid override may still apply; otherwise the label falls back to **Theme-Matched Fast Label Color**.
+
+### Legacy Fast Label Color migration
+
+Older generated config may contain direct literal **Legacy Fast Label Color** values: `#ff50be` for the dark field or `#d20000` for the light field. Direct legacy literals are treated as unset during load and merge, with surrounding whitespace ignored and hex case ignored, so they do not block theme-matched behavior or override real custom colors from another config layer. Successful config writes remove those direct legacy literal fields while preserving real overrides, `footer.vars`, sibling footer settings, and unknown user-owned fields.
+
+If you intentionally want one of the old literal colors, re-express it through a variable-valued **Fast Label Color Override** so the value is clearly user-owned:
+
+```json
+{
+  "footer": {
+    "mode": "replace",
+    "vars": {
+      "oldFastPink": "#ff50be",
+      "oldFastRed": "#d20000"
+    },
+    "darkFastColor": "oldFastPink",
+    "lightFastColor": "oldFastRed"
+  }
+}
+```
 
 ## Warnings and config repair
 
-Warnings from config loading, config writes, supported-model normalization, and invalid Fast Desired Handoff values are shown through Pi UI notifications when a UI warning sink is available. Headless runs fall back to console warnings prefixed with `[pi-openai-fast]`. Warning delivery failures are ignored so startup and command handling can continue.
+Warnings from config loading, config writes, supported-model normalization, Fast label color normalization, and invalid Fast Desired Handoff values are shown through Pi UI notifications when a UI warning sink is available. Headless runs fall back to console warnings prefixed with `[pi-openai-fast]`. Warning delivery failures are ignored so startup, command handling, and rendering can continue.
 
 A **Malformed Fast Config** is a selected config file that exists but cannot be read as a JSON object. Loading remains tolerant and can fall back to other layers or defaults, but preference writes are conservative:
 
