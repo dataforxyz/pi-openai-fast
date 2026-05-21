@@ -12,7 +12,7 @@ async function readPackageJson() {
   return JSON.parse(await readFile(packageJsonPath, "utf8"));
 }
 
-test("package manifest is installable by Pi and targets current Pi packages", async () => {
+test("package manifest is installable by Pi without pinning a host Pi version", async () => {
   const pkg = await readPackageJson();
 
   assert.equal(pkg.name, "pi-openai-fast");
@@ -24,11 +24,11 @@ test("package manifest is installable by Pi and targets current Pi packages", as
   assert.match(pkg.scripts?.check ?? "", /npm run typecheck\s*&&\s*npm test/);
   assert.equal(typeof pkg.devDependencies?.typescript, "string");
 
-  assert.deepEqual(Object.keys(pkg.peerDependencies ?? {}).sort(), [
-    "@earendil-works/pi-ai",
-    "@earendil-works/pi-coding-agent",
-    "@earendil-works/pi-tui",
-  ]);
+  assert.deepEqual(pkg.peerDependencies, {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+  });
   assert.equal(
     Object.keys({ ...(pkg.dependencies ?? {}), ...(pkg.peerDependencies ?? {}) }).some((name) =>
       name.startsWith("@mariozechner/"),

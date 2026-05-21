@@ -2,8 +2,6 @@
 
 Pi extension for OpenAI Fast Mode.
 
-Requires pi 0.75.3 or newer.
-
 ## Install
 
 ```bash
@@ -70,4 +68,4 @@ Fast colors accept six-digit hex values, 256-color indexes, variable references 
 
 ## Reference attribution
 
-Inspired by https://github.com/mattleong/pi-better-openai/
+Inspired by [pi-better-openai](https://github.com/mattleong/pi-better-openai/).

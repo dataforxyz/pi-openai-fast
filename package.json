@@ -1,6 +1,6 @@
 {
   "name": "pi-openai-fast",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Focused Pi extension for OpenAI Fast Mode priority service-tier requests.",
   "keywords": [
     "fast",
@@ -29,9 +29,9 @@
     "test": "node --test tests/*.test.mjs"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.75.3",
-    "@earendil-works/pi-coding-agent": ">=0.75.3",
-    "@earendil-works/pi-tui": ">=0.75.3"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "pi": {
     "extensions": [
