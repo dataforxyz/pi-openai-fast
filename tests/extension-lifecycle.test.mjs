@@ -413,6 +413,81 @@ test("lifecycle treats loaded literal legacy fast label colors as no custom over
   assert.doesNotMatch(output, /\x1b\[38;5;160mfast/);
 });
 
+test("session startup surfaces invalid fast label color warnings through UI and uses theme fallback", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const configStore = new FastConfigStore({ home });
+  const globalPath = configStore.paths(cwd).global;
+  const thinkingLevels = [];
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      persistState: true,
+      desiredActive: true,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: {
+        mode: "replace",
+        vars: {},
+        darkFastColor: "missingBrand",
+      },
+    }),
+  );
+
+  const harness = createHarness(undefined, { configStore, thinkingLevel: "high" });
+  const { ctx, footer, notifications } = createContext({
+    cwd,
+    captureFooter: true,
+    currentModel: { provider: "partner", id: "gpt-5.5", reasoning: true, contextWindow: 200_000 },
+    theme: createTheme({ thinkingLevels }),
+  });
+
+  await emit(harness, "session_start", { type: "session_start" }, ctx);
+  const output = footer.component.render(100).join("\n");
+
+  assert.deepEqual(
+    notifications.filter(({ type }) => type === "warning").map(({ message }) => message),
+    [
+      `Ignored invalid Fast label color footer.darkFastColor at ${globalPath}: "missingBrand" (variable "missingBrand" is not defined).`,
+    ],
+  );
+  assert.match(output, /gpt-5\.5 .*\x1b\[38;5;147mfast\x1b\[39m\x1b\[38;5;8m • high/);
+  assert.deepEqual(thinkingLevels, ["high"]);
+});
+
+test("session startup routes invalid fast label color warnings to console when UI notifications are unavailable", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const configStore = new FastConfigStore({ home });
+  const globalPath = configStore.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(
+    globalPath,
+    JSON.stringify({
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: {
+        mode: "replace",
+        darkFastColor: "not a color",
+      },
+    }),
+  );
+
+  const harness = createHarness(undefined, { configStore });
+  const { ctx } = createContext({ cwd, hasNotify: false, currentModel: model("partner", "gpt-5.5") });
+
+  const warnings = await captureConsoleWarnings(async () => {
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+  });
+
+  assert.deepEqual(warnings, [
+    `[pi-openai-fast] Ignored invalid Fast label color footer.darkFastColor at ${globalPath}: "not a color" (it is not a supported color token).`,
+  ]);
+});
+
 test("session startup routes config and handoff warnings to UI once for the current operation", async () => {
   const configWarning = {
     code: "config-supported-models-dropped",

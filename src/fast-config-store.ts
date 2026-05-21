@@ -1,8 +1,8 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { FastColorValue } from "./fast-colors.ts";
-import { isLegacyFastLabelColorLiteral, normalizeFastColorValue } from "./fast-colors.ts";
+import type { FastColorResolutionResult, FastColorValue } from "./fast-colors.ts";
+import { isLegacyFastLabelColorLiteral, normalizeFastColorValue, resolveFastColorValueDetailed } from "./fast-colors.ts";
 import { emitFastWarning, warnToConsole, type FastWarning } from "./fast-warnings.ts";
 
 export const DEFAULT_SUPPORTED_MODELS = [
@@ -47,6 +47,7 @@ export type FastConfigWarningCode = Extract<
   | "config-supported-models-not-array"
   | "config-supported-models-dropped"
   | "config-supported-models-all-invalid"
+  | "config-fast-label-color-invalid"
 >;
 
 export interface FastConfigWarning extends FastWarning {
@@ -88,6 +89,8 @@ interface SupportedModelsNormalizationResult {
   allInvalid: boolean;
   notArray: boolean;
 }
+
+type FastLabelColorFieldName = "footer.darkFastColor" | "footer.lightFastColor";
 
 function defaultFastConfig(): FastConfig {
   return {
@@ -217,15 +220,71 @@ function migratedDesiredActive(source: JsonRecord, fallback: boolean): boolean {
   return fallback;
 }
 
-function normalizeWritableFastColorValue(value: unknown): FastColorValue | undefined {
+function invalidFastColorReason(resolution: FastColorResolutionResult | undefined): string {
+  if (resolution?.kind !== "invalid") {
+    return "it is not a supported color token";
+  }
+
+  if (resolution.reason === "missing-variable") {
+    return `variable ${JSON.stringify(resolution.reference)} is not defined`;
+  }
+
+  if (resolution.reason === "circular-variable") {
+    return `variable ${JSON.stringify(resolution.reference)} resolves circularly`;
+  }
+
+  return "it is not a supported color token";
+}
+
+function emitInvalidFastLabelColorWarning(
+  warningContext: ConfigWarningContext | undefined,
+  field: FastLabelColorFieldName,
+  value: unknown,
+  resolution?: FastColorResolutionResult | undefined,
+): void {
+  if (warningContext === undefined) {
+    return;
+  }
+
+  emitWarning(warningContext.warn, {
+    code: "config-fast-label-color-invalid",
+    path: warningContext.path,
+    name: field,
+    value: describeWarningValue(value),
+    message: `Ignored invalid Fast label color ${field} at ${warningContext.path}: ${describeWarningValue(value)} (${invalidFastColorReason(resolution)}).`,
+  });
+}
+
+function normalizeConfiguredFastColorValue(
+  value: unknown,
+  vars: Readonly<Record<string, string>>,
+  field: FastLabelColorFieldName,
+  warningContext: ConfigWarningContext | undefined,
+): FastColorValue | undefined {
   if (isLegacyFastLabelColorLiteral(value)) {
     return undefined;
   }
 
-  return normalizeFastColorValue(value);
+  const normalized = normalizeFastColorValue(value);
+  if (normalized === undefined) {
+    emitInvalidFastLabelColorWarning(warningContext, field, value);
+    return undefined;
+  }
+
+  const resolution = resolveFastColorValueDetailed(normalized, vars);
+  if (resolution.kind === "invalid") {
+    emitInvalidFastLabelColorWarning(warningContext, field, value, resolution);
+    return undefined;
+  }
+
+  return normalized;
 }
 
-function sanitizeFooterRecordForWrite(source: JsonRecord): JsonRecord {
+function footerVarsForValidation(footer: JsonRecord): Record<string, string> {
+  return isRecord(footer.vars) ? normalizeStringRecord(footer.vars) : {};
+}
+
+function sanitizeFooterRecordForWrite(source: JsonRecord, warningContext?: ConfigWarningContext): JsonRecord {
   const next: JsonRecord = { ...source };
 
   if (hasOwnField(next, "mode") && !isFooterMode(next.mode)) {
@@ -240,8 +299,15 @@ function sanitizeFooterRecordForWrite(source: JsonRecord): JsonRecord {
     }
   }
 
+  const vars = footerVarsForValidation(next);
+
   if (hasOwnField(next, "darkFastColor")) {
-    const darkFastColor = normalizeWritableFastColorValue(next.darkFastColor);
+    const darkFastColor = normalizeConfiguredFastColorValue(
+      next.darkFastColor,
+      vars,
+      "footer.darkFastColor",
+      warningContext,
+    );
     if (darkFastColor === undefined) {
       delete next.darkFastColor;
     } else {
@@ -250,7 +316,12 @@ function sanitizeFooterRecordForWrite(source: JsonRecord): JsonRecord {
   }
 
   if (hasOwnField(next, "lightFastColor")) {
-    const lightFastColor = normalizeWritableFastColorValue(next.lightFastColor);
+    const lightFastColor = normalizeConfiguredFastColorValue(
+      next.lightFastColor,
+      vars,
+      "footer.lightFastColor",
+      warningContext,
+    );
     if (lightFastColor === undefined) {
       delete next.lightFastColor;
     } else {
@@ -286,21 +357,13 @@ function sanitizeConfigRecordForWrite(source: JsonRecord, warningContext?: Confi
 
   if (hasOwnField(next, "footer")) {
     if (isRecord(next.footer)) {
-      next.footer = sanitizeFooterRecordForWrite(next.footer);
+      next.footer = sanitizeFooterRecordForWrite(next.footer, warningContext);
     } else {
       delete next.footer;
     }
   }
 
   return next;
-}
-
-function normalizeLoadedFastColorValue(value: unknown): FastColorValue | undefined {
-  if (isLegacyFastLabelColorLiteral(value)) {
-    return undefined;
-  }
-
-  return normalizeFastColorValue(value);
 }
 
 function mergeKnownConfig(base: FastConfig, source: JsonRecord, warningContext?: ConfigWarningContext): FastConfig {
@@ -328,13 +391,27 @@ function mergeKnownConfig(base: FastConfig, source: JsonRecord, warningContext?:
     if (isRecord(source.footer.vars)) {
       next.footer.vars = normalizeStringRecord(source.footer.vars);
     }
-    const darkFastColor = normalizeLoadedFastColorValue(source.footer.darkFastColor);
-    if (darkFastColor !== undefined) {
-      next.footer.darkFastColor = darkFastColor;
+    if (hasOwnField(source.footer, "darkFastColor")) {
+      const darkFastColor = normalizeConfiguredFastColorValue(
+        source.footer.darkFastColor,
+        next.footer.vars,
+        "footer.darkFastColor",
+        warningContext,
+      );
+      if (darkFastColor !== undefined) {
+        next.footer.darkFastColor = darkFastColor;
+      }
     }
-    const lightFastColor = normalizeLoadedFastColorValue(source.footer.lightFastColor);
-    if (lightFastColor !== undefined) {
-      next.footer.lightFastColor = lightFastColor;
+    if (hasOwnField(source.footer, "lightFastColor")) {
+      const lightFastColor = normalizeConfiguredFastColorValue(
+        source.footer.lightFastColor,
+        next.footer.vars,
+        "footer.lightFastColor",
+        warningContext,
+      );
+      if (lightFastColor !== undefined) {
+        next.footer.lightFastColor = lightFastColor;
+      }
     }
   }
 

@@ -69,35 +69,67 @@ export function isLegacyFastLabelColorLiteral(value: unknown): boolean {
   return typeof normalized === "string" && LEGACY_FAST_LABEL_COLOR_LITERALS.has(normalized.toLowerCase());
 }
 
+export type FastColorResolutionFailureReason = "invalid-value" | "missing-variable" | "circular-variable";
+
+export type FastColorResolutionResult =
+  | { kind: "resolved"; value: FastColorValue }
+  | { kind: "invalid"; reason: FastColorResolutionFailureReason; reference?: string | undefined };
+
 function resolveVariableRef(
   value: string,
   vars: Readonly<Record<string, string>>,
   visited: Set<string>,
-): FastColorValue | undefined {
+): FastColorResolutionResult {
   if (!COLOR_VAR_REFERENCE.test(value)) {
-    return undefined;
+    return { kind: "invalid", reason: "invalid-value" };
   }
 
   if (visited.has(value)) {
-    return undefined;
+    return { kind: "invalid", reason: "circular-variable", reference: value };
   }
 
-  if (!isStringRecord(vars) || !(value in vars)) {
-    return undefined;
+  if (!isStringRecord(vars) || !Object.prototype.hasOwnProperty.call(vars, value)) {
+    return { kind: "invalid", reason: "missing-variable", reference: value };
   }
 
-  const resolved = vars[value]?.trim();
-  if (resolved === undefined) {
-    return undefined;
+  const resolved = (vars as Readonly<Record<string, unknown>>)[value];
+  if (typeof resolved !== "string") {
+    return { kind: "invalid", reason: "missing-variable", reference: value };
   }
 
   visited.add(value);
-  const normalized = normalizeFastColorValue(resolved);
+  const normalized = normalizeFastColorValue(resolved.trim());
   if (normalized === undefined) {
-    return undefined;
+    return { kind: "invalid", reason: "invalid-value", reference: value };
   }
 
-  return resolveFastColorValue(normalized, vars, visited);
+  return resolveFastColorValueDetailed(normalized, vars, visited);
+}
+
+export function resolveFastColorValueDetailed(
+  value: FastColorValue,
+  vars: Readonly<Record<string, string>>,
+  visited = new Set<string>(),
+): FastColorResolutionResult {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed === "") {
+      return { kind: "resolved", value: "" };
+    }
+
+    if (HEX_COLOR.test(trimmed) || INTEGER_INDEX.test(trimmed)) {
+      const normalized = normalizeFastColorValue(trimmed);
+      return normalized === undefined
+        ? { kind: "invalid", reason: "invalid-value" }
+        : { kind: "resolved", value: normalized };
+    }
+
+    return resolveVariableRef(trimmed, vars, visited);
+  }
+
+  return isValidIntegerColorIndex(value)
+    ? { kind: "resolved", value }
+    : { kind: "invalid", reason: "invalid-value" };
 }
 
 /**
@@ -110,20 +142,8 @@ export function resolveFastColorValue(
   vars: Readonly<Record<string, string>>,
   visited = new Set<string>(),
 ): FastColorValue | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed === "") {
-      return "";
-    }
-
-    if (HEX_COLOR.test(trimmed) || INTEGER_INDEX.test(trimmed)) {
-      return normalizeFastColorValue(trimmed);
-    }
-
-    return resolveVariableRef(trimmed, vars, visited);
-  }
-
-  return isValidIntegerColorIndex(value) ? value : undefined;
+  const resolution = resolveFastColorValueDetailed(value, vars, visited);
+  return resolution.kind === "resolved" ? resolution.value : undefined;
 }
 
 const ANSI_RESET_FOREGROUND = "\x1b[39m";

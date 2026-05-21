@@ -41,6 +41,22 @@ test("delegates active labels with invalid configured color to the caller defaul
   );
 });
 
+test("delegates prototype-name variable labels to the caller default renderer without throwing", () => {
+  const formatter = new FastLabelFormatter();
+
+  assert.doesNotThrow(() => {
+    assert.equal(
+      formatter.formatFastLabel({
+        active: true,
+        darkFastColor: "toString",
+        footerVars: {},
+        renderDefaultActiveLabel: () => "<theme-fast>",
+      }),
+      "<theme-fast>",
+    );
+  });
+});
+
 test("formats fast label using 256-color mode with numeric colors", () => {
   const formatter = new FastLabelFormatter();
 

@@ -5,6 +5,7 @@ import {
   isLegacyFastLabelColorLiteral,
   normalizeFastColorValue,
   resolveFastColorValue,
+  resolveFastColorValueDetailed,
 } from "../src/fast-colors.ts";
 
 const RESET_FOREGROUND = "\x1b[39m";
@@ -12,6 +13,24 @@ const RESET_FOREGROUND = "\x1b[39m";
 test("resolves missing and circular fast color variables to undefined", () => {
   assert.equal(resolveFastColorValue("missing", {}), undefined);
   assert.equal(resolveFastColorValue("brand", { brand: "accent", accent: "brand" }), undefined);
+});
+
+test("reports missing and circular fast color variable resolution reasons", () => {
+  assert.deepEqual(resolveFastColorValueDetailed("missing", {}), {
+    kind: "invalid",
+    reason: "missing-variable",
+    reference: "missing",
+  });
+  assert.deepEqual(resolveFastColorValueDetailed("toString", {}), {
+    kind: "invalid",
+    reason: "missing-variable",
+    reference: "toString",
+  });
+  assert.deepEqual(resolveFastColorValueDetailed("brand", { brand: "accent", accent: "brand" }), {
+    kind: "invalid",
+    reason: "circular-variable",
+    reference: "brand",
+  });
 });
 
 test("rejects invalid 256-color indexes during normalization and resolution", () => {

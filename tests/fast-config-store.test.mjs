@@ -267,8 +267,11 @@ test("preserves unknown fields while sanitizing invalid known fields on writes",
     unknownTop: { keep: true },
   });
   assert.deepEqual(
-    warnings.map(({ code, path }) => ({ code, path })),
-    [{ code: "config-supported-models-dropped", path: projectPath }],
+    warnings.map(({ code, path, name }) => ({ code, path, name })),
+    [
+      { code: "config-supported-models-dropped", path: projectPath, name: undefined },
+      { code: "config-fast-label-color-invalid", path: projectPath, name: "footer.darkFastColor" },
+    ],
   );
 });
 
@@ -288,10 +291,11 @@ test("falls back to defaults and warns when config cannot be read", async () => 
   assert.equal(warnings[0].path, globalPath);
 });
 
-test("invalid string footer colors are omitted on load while valid color siblings remain", async () => {
+test("invalid string footer colors are omitted and reported on load while valid color siblings remain", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");
-  const store = new FastConfigStore({ home });
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
   const globalPath = store.paths(cwd).global;
 
   await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
@@ -312,6 +316,64 @@ test("invalid string footer colors are omitted on load while valid color sibling
     vars: { brand: "#123456" },
     lightFastColor: "brand",
   });
+  assert.deepEqual(
+    warnings.map(({ code, path, name, value }) => ({ code, path, name, value })),
+    [
+      {
+        code: "config-fast-label-color-invalid",
+        path: globalPath,
+        name: "footer.darkFastColor",
+        value: '"definitely not a color"',
+      },
+    ],
+  );
+});
+
+test("warns about invalid fast label color types and indexes without overriding lower-priority valid colors", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(
+    paths.global,
+    JSON.stringify({
+      footer: {
+        darkFastColor: "#123456",
+        lightFastColor: "#654321",
+      },
+    }),
+  );
+  await writeFile(
+    paths.project,
+    JSON.stringify({
+      footer: {
+        darkFastColor: { not: "a color" },
+        lightFastColor: 256,
+      },
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).footer, {
+    ...DEFAULT_FAST_CONFIG.footer,
+    darkFastColor: "#123456",
+    lightFastColor: "#654321",
+  });
+  assert.deepEqual(
+    warnings.map(({ code, path, name, value }) => ({ code, path, name, value })),
+    [
+      {
+        code: "config-fast-label-color-invalid",
+        path: paths.project,
+        name: "footer.darkFastColor",
+        value: '{"not":"a color"}',
+      },
+      { code: "config-fast-label-color-invalid", path: paths.project, name: "footer.lightFastColor", value: "256" },
+    ],
+  );
 });
 
 test("valid custom and variable-valued footer colors are preserved on load", async () => {
@@ -388,6 +450,85 @@ test("variable-valued fast label overrides remain user-owned even when they reso
     darkFastColor: "legacyPink",
     lightFastColor: "legacyRed",
   });
+});
+
+test("missing and circular fast label color variables warn and are ignored as overrides", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(paths.global, JSON.stringify({ footer: { darkFastColor: "#123456" } }));
+  await writeFile(
+    paths.project,
+    JSON.stringify({
+      footer: {
+        vars: { loop: "loop" },
+        darkFastColor: "missingBrand",
+        lightFastColor: "loop",
+      },
+    }),
+  );
+
+  assert.deepEqual((await store.load(cwd)).footer, {
+    ...DEFAULT_FAST_CONFIG.footer,
+    vars: { loop: "loop" },
+    darkFastColor: "#123456",
+  });
+  assert.deepEqual(
+    warnings.map(({ code, path, name, value, message }) => ({ code, path, name, value, message })),
+    [
+      {
+        code: "config-fast-label-color-invalid",
+        path: paths.project,
+        name: "footer.darkFastColor",
+        value: '"missingBrand"',
+        message: `Ignored invalid Fast label color footer.darkFastColor at ${paths.project}: "missingBrand" (variable "missingBrand" is not defined).`,
+      },
+      {
+        code: "config-fast-label-color-invalid",
+        path: paths.project,
+        name: "footer.lightFastColor",
+        value: '"loop"',
+        message: `Ignored invalid Fast label color footer.lightFastColor at ${paths.project}: "loop" (variable "loop" resolves circularly).`,
+      },
+    ],
+  );
+});
+
+test("prototype-name fast label color variables warn and fall back without crashing config load", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const warnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => warnings.push(warning) });
+  const paths = store.paths(cwd);
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+  await writeFile(paths.global, JSON.stringify({ footer: { darkFastColor: "#123456" } }));
+  await writeFile(paths.project, JSON.stringify({ footer: { darkFastColor: "toString" } }));
+
+  await assert.doesNotReject(async () => {
+    assert.deepEqual((await store.load(cwd)).footer, {
+      ...DEFAULT_FAST_CONFIG.footer,
+      darkFastColor: "#123456",
+    });
+  });
+  assert.deepEqual(
+    warnings.map(({ code, path, name, value, message }) => ({ code, path, name, value, message })),
+    [
+      {
+        code: "config-fast-label-color-invalid",
+        path: paths.project,
+        name: "footer.darkFastColor",
+        value: '"toString"',
+        message: `Ignored invalid Fast label color footer.darkFastColor at ${paths.project}: "toString" (variable "toString" is not defined).`,
+      },
+    ],
+  );
 });
 
 test("higher-priority legacy literals do not override lower-priority custom fast label colors", async () => {
@@ -611,8 +752,11 @@ test("invalid known config values fall back without losing valid nested siblings
     },
   });
   assert.deepEqual(
-    warnings.map(({ code, path }) => ({ code, path })),
-    [{ code: "config-supported-models-not-array", path: globalPath }],
+    warnings.map(({ code, path, name }) => ({ code, path, name })),
+    [
+      { code: "config-supported-models-not-array", path: globalPath, name: undefined },
+      { code: "config-fast-label-color-invalid", path: globalPath, name: "footer.darkFastColor" },
+    ],
   );
 });
 

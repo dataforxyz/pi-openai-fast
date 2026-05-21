@@ -6,6 +6,7 @@ export type FastWarningCode =
   | "config-supported-models-not-array"
   | "config-supported-models-dropped"
   | "config-supported-models-all-invalid"
+  | "config-fast-label-color-invalid"
   | "fast-handoff-invalid-value";
 
 export interface FastWarning {
