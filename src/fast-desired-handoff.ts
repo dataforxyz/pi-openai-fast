@@ -1,14 +1,15 @@
+import type { FastWarning } from "./fast-warnings.ts";
+
 export const FAST_DESIRED_HANDOFF_ENV = "PI_OPENAI_FAST_DESIRED";
 export const FAST_HANDOFF_INVALID_VALUE_WARNING_CODE = "fast-handoff-invalid-value";
 
 export type FastDesiredHandoffEnvironment = Readonly<Record<string, string | undefined>>;
 export type WritableFastDesiredHandoffEnvironment = Record<string, string | undefined>;
 
-export interface FastDesiredHandoffInvalidValueWarning {
+export interface FastDesiredHandoffInvalidValueWarning extends FastWarning {
   code: typeof FAST_HANDOFF_INVALID_VALUE_WARNING_CODE;
   name: typeof FAST_DESIRED_HANDOFF_ENV;
   value: string;
-  message: string;
 }
 
 export type FastDesiredHandoffReadResult =

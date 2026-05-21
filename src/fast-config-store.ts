@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { FastColorValue } from "./fast-colors.ts";
 import { normalizeFastColorValue } from "./fast-colors.ts";
+import { emitFastWarning, warnToConsole, type FastWarning } from "./fast-warnings.ts";
 
 export const DEFAULT_SUPPORTED_MODELS = [
   "openai/gpt-5.4",
@@ -39,20 +40,20 @@ export const DEFAULT_FAST_CONFIG: FastConfig = {
   },
 };
 
-export type FastConfigWarningCode =
+export type FastConfigWarningCode = Extract<
+  FastWarning["code"],
   | "config-read-failed"
   | "config-default-write-failed"
   | "config-write-failed"
   | "config-malformed-write-refused"
   | "config-supported-models-not-array"
   | "config-supported-models-dropped"
-  | "config-supported-models-all-invalid";
+  | "config-supported-models-all-invalid"
+>;
 
-export interface FastConfigWarning {
+export interface FastConfigWarning extends FastWarning {
   code: FastConfigWarningCode;
   path: string;
-  message: string;
-  cause?: unknown;
 }
 
 export type FastConfigWarningSink = (warning: FastConfigWarning) => void;
@@ -62,9 +63,13 @@ export interface FastConfigStoreOptions {
   warn?: FastConfigWarningSink;
 }
 
+export interface FastConfigOperationOptions {
+  warn?: FastConfigWarningSink | undefined;
+}
+
 export interface FastConfigRepository {
-  load(cwd: string): Promise<FastConfig>;
-  writeDesiredActive(cwd: string, desiredActive: boolean): Promise<boolean>;
+  load(cwd: string, options?: FastConfigOperationOptions): Promise<FastConfig>;
+  writeDesiredActive(cwd: string, desiredActive: boolean, options?: FastConfigOperationOptions): Promise<boolean>;
 }
 
 interface FastConfigPaths {
@@ -318,15 +323,11 @@ type ConfigReadResult =
   | { kind: "failed" };
 
 function defaultWarningSink(warning: FastConfigWarning): void {
-  console.warn(`[pi-openai-fast] ${warning.message}`);
+  warnToConsole(warning);
 }
 
 function emitWarning(warn: FastConfigWarningSink, warning: FastConfigWarning): void {
-  try {
-    warn(warning);
-  } catch {
-    // A warning sink should not turn config fallback into a startup failure.
-  }
+  emitFastWarning(warn, warning);
 }
 
 function describeWarningValue(value: unknown): string {
@@ -466,41 +467,51 @@ export class FastConfigStore implements FastConfigRepository {
     };
   }
 
-  async load(cwd: string): Promise<FastConfig> {
+  private warningSink(options: FastConfigOperationOptions | undefined): FastConfigWarningSink {
+    return options?.warn ?? this.warn;
+  }
+
+  async load(cwd: string, options?: FastConfigOperationOptions): Promise<FastConfig> {
     const paths = this.paths(cwd);
+    const warn = this.warningSink(options);
     let config = defaultFastConfig();
 
-    const globalConfig = await readConfigRecord(paths.global, this.warn);
-    const projectConfig = await readConfigRecord(paths.project, this.warn);
+    const globalConfig = await readConfigRecord(paths.global, warn);
+    const projectConfig = await readConfigRecord(paths.project, warn);
 
     if (globalConfig.kind === "missing" && projectConfig.kind === "missing") {
-      await writeConfigRecord(paths.global, configToRawRecord(config), this.warn, "config-default-write-failed");
+      await writeConfigRecord(paths.global, configToRawRecord(config), warn, "config-default-write-failed");
       return config;
     }
 
     if (globalConfig.kind === "loaded") {
-      config = mergeKnownConfig(config, globalConfig.record, { path: paths.global, warn: this.warn });
+      config = mergeKnownConfig(config, globalConfig.record, { path: paths.global, warn });
     }
 
     if (projectConfig.kind === "loaded") {
-      config = mergeKnownConfig(config, projectConfig.record, { path: paths.project, warn: this.warn });
+      config = mergeKnownConfig(config, projectConfig.record, { path: paths.project, warn });
     }
 
     return config;
   }
 
-  async writeDesiredActive(cwd: string, desiredActive: boolean): Promise<boolean> {
+  async writeDesiredActive(
+    cwd: string,
+    desiredActive: boolean,
+    options?: FastConfigOperationOptions,
+  ): Promise<boolean> {
     const paths = this.paths(cwd);
+    const warn = this.warningSink(options);
     const target = await selectWriteTarget(paths);
-    const existing = await readWriteTargetConfigRecord(target, this.warn);
+    const existing = await readWriteTargetConfigRecord(target, warn);
 
     if (existing.kind === "failed") {
       return false;
     }
 
-    const next = sanitizeConfigRecordForWrite(rawRecordForWrite(existing), { path: target, warn: this.warn });
+    const next = sanitizeConfigRecordForWrite(rawRecordForWrite(existing), { path: target, warn });
     next.desiredActive = desiredActive;
 
-    return await writeConfigRecord(target, next, this.warn, "config-write-failed");
+    return await writeConfigRecord(target, next, warn, "config-write-failed");
   }
 }

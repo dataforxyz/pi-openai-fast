@@ -123,6 +123,26 @@ test("normalizes supported model entries and warns about dropped invalid entries
   assert.match(warnings[0].message, /openai\/gpt-5\.\*/);
 });
 
+test("load can route warnings to an operation-local collector", async () => {
+  const home = await tempHome();
+  const cwd = join(home, "repo");
+  const constructorWarnings = [];
+  const operationWarnings = [];
+  const store = new FastConfigStore({ home, warn: (warning) => constructorWarnings.push(warning) });
+  const globalPath = store.paths(cwd).global;
+
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(globalPath, JSON.stringify({ supportedModels: "openai/gpt-5.5" }));
+
+  await store.load(cwd, { warn: (warning) => operationWarnings.push(warning) });
+
+  assert.deepEqual(constructorWarnings, []);
+  assert.deepEqual(
+    operationWarnings.map(({ code, path }) => ({ code, path })),
+    [{ code: "config-supported-models-not-array", path: globalPath }],
+  );
+});
+
 test("warns when a non-empty supportedModels list has no valid entries", async () => {
   const home = await tempHome();
   const cwd = join(home, "repo");

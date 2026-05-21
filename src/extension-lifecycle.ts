@@ -6,14 +6,16 @@ import type {
   ExtensionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { FAST_COMMAND } from "./capabilities.ts";
-import { executeFastCommand } from "./fast-command.ts";
-import { DEFAULT_FAST_CONFIG, FastConfigStore, type FastConfig, type FastConfigRepository } from "./fast-config-store.ts";
+import { executeFastCommand, FAST_COMMAND_SAVE_FAILED_MESSAGE } from "./fast-command.ts";
 import {
-  readFastDesiredHandoff,
-  writeFastDesiredHandoff,
-  type FastDesiredHandoffInvalidValueWarning,
-} from "./fast-desired-handoff.ts";
+  DEFAULT_FAST_CONFIG,
+  FastConfigStore,
+  type FastConfig,
+  type FastConfigRepository,
+} from "./fast-config-store.ts";
+import { readFastDesiredHandoff, writeFastDesiredHandoff } from "./fast-desired-handoff.ts";
 import { FastStateEngine } from "./fast-state-engine.ts";
+import { createFastWarningCollector, deliverFastWarnings, hasConfigWriteFailureWarning } from "./fast-warnings.ts";
 import { FooterFeedback } from "./footer-feedback.ts";
 import { ServiceTierInjector } from "./service-tier-injector.ts";
 import { isStartupFastOverrideRequested, registerStartupFastOverrideFlag } from "./startup-fast-override.ts";
@@ -60,6 +62,14 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
   let configLoaded = false;
   let currentConfig = cloneDefaultConfig();
 
+  function notifyUi(ui: ExtensionContext["ui"] | undefined, message: string, type: "info" | "warning" | "error"): void {
+    try {
+      ui?.notify?.(message, type);
+    } catch {
+      // Notification sinks must not make lifecycle or command handling fail.
+    }
+  }
+
   function getUiForFooterFeedback(ui: ExtensionContext["ui"] | undefined): {
     notify(message: string, type?: "info" | "warning" | "error"): void;
     setFooter: ExtensionContext["ui"]["setFooter"] | undefined;
@@ -67,7 +77,7 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
   } {
     return {
       notify(message, type) {
-        ui?.notify?.(message, type);
+        notifyUi(ui, message, type ?? "info");
       },
       setFooter: typeof ui?.setFooter === "function" ? ui.setFooter.bind(ui) : undefined,
       setStatus: typeof ui?.setStatus === "function" ? ui.setStatus.bind(ui) : undefined,
@@ -79,30 +89,10 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
     | undefined
   {
     if (typeof ui?.notify === "function") {
-      return { notify: ui.notify.bind(ui) };
+      return { notify: (message, type) => notifyUi(ui, message, type) };
     }
 
     return undefined;
-  }
-
-  function notifyUi(ui: ExtensionContext["ui"] | undefined, message: string, type: "info" | "warning" | "error"): void {
-    ui?.notify?.(message, type);
-  }
-
-  function warnForInvalidFastDesiredHandoff(
-    warning: FastDesiredHandoffInvalidValueWarning,
-    ui: ExtensionContext["ui"] | undefined,
-  ): void {
-    try {
-      if (typeof ui?.notify === "function") {
-        ui.notify(warning.message, "warning");
-        return;
-      }
-
-      console.warn(`[pi-openai-fast] ${warning.message}`);
-    } catch {
-      // Warning delivery must not make startup fail.
-    }
   }
 
   function syncFooter(ctx: ExtensionContext, currentModel = ctx.model): void {
@@ -127,13 +117,15 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
     ctx: ExtensionContext,
     currentModel = ctx.model,
   ): Promise<FastConfig> {
-    currentConfig = await configStore.load(ctx.cwd);
+    const warningCollector = createFastWarningCollector();
+    currentConfig = await configStore.load(ctx.cwd, { warn: warningCollector.collect });
     configLoaded = true;
     const startupFastOverride = isStartupFastOverrideRequested(pi);
     const fastDesiredHandoff = readFastDesiredHandoff();
     if (fastDesiredHandoff.kind === "invalid") {
-      warnForInvalidFastDesiredHandoff(fastDesiredHandoff.warning, ctx.ui);
+      warningCollector.collect(fastDesiredHandoff.warning);
     }
+    deliverFastWarnings(warningCollector.warnings, ctx.ui);
     if (startupFastOverride) {
       writeFastDesiredHandoff(true);
     }
@@ -164,14 +156,26 @@ export function registerPiOpenAIFast(pi: ExtensionAPI, options: PiOpenAIFastRunt
     description: "Toggle Fast Mode priority service tier",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const config = await ensureConfig(ctx);
+      const warningCollector = createFastWarningCollector();
       const result = await executeFastCommand(args, {
         stateEngine,
         config,
         currentModel: ctx.model,
-        saveDesiredActive: (desiredActive) => configStore.writeDesiredActive(ctx.cwd, desiredActive),
+        saveDesiredActive: (desiredActive) =>
+          configStore.writeDesiredActive(ctx.cwd, desiredActive, { warn: warningCollector.collect }),
         writeFastDesiredHandoff,
-        notify: (message, type) => notifyUi(ctx.ui, message, type),
+        notify: (message, type) => {
+          if (
+            type === "warning" &&
+            message === FAST_COMMAND_SAVE_FAILED_MESSAGE &&
+            hasConfigWriteFailureWarning(warningCollector.warnings)
+          ) {
+            return;
+          }
+          notifyUi(ctx.ui, message, type);
+        },
       });
+      deliverFastWarnings(warningCollector.warnings, ctx.ui);
 
       if (result.kind === "toggled") {
         currentConfig = { ...currentConfig, desiredActive: result.state.desiredActive };

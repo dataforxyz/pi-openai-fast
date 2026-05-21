@@ -23,16 +23,24 @@ class MemoryConfigStore {
   constructor(config, options = {}) {
     this.config = config;
     this.desiredActiveWriteResult = options.desiredActiveWriteResult ?? true;
+    this.loadWarnings = options.loadWarnings ?? [];
+    this.writeWarnings = options.writeWarnings ?? [];
     this.writes = [];
   }
 
-  async load(cwd) {
+  async load(cwd, options = {}) {
     this.lastLoadCwd = cwd;
+    for (const warning of this.loadWarnings) {
+      options.warn?.(warning);
+    }
     return this.config;
   }
 
-  async writeDesiredActive(cwd, desiredActive) {
+  async writeDesiredActive(cwd, desiredActive, options = {}) {
     this.writes.push({ cwd, desiredActive });
+    for (const warning of this.writeWarnings) {
+      options.warn?.(warning);
+    }
     return this.desiredActiveWriteResult;
   }
 }
@@ -68,6 +76,9 @@ function createContext(options = {}) {
       ? {}
       : {
           notify(message, type) {
+            if (options.notifyThrows) {
+              throw new Error("notification failed");
+            }
             notifications.push({ message, type });
           },
         }),
@@ -122,6 +133,8 @@ function createHarness(config, options = {}) {
   const flagValues = new Map(Object.entries(options.flags ?? {}));
   const configStore = new MemoryConfigStore(config, {
     desiredActiveWriteResult: options.desiredActiveWriteResult,
+    loadWarnings: options.loadWarnings,
+    writeWarnings: options.writeWarnings,
   });
   const pi = {
     registerCommand(name, options) {
@@ -194,6 +207,22 @@ async function withFastDesiredHandoffEnv(value, run) {
   }
 }
 
+async function captureConsoleWarnings(run) {
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (message) => {
+    warnings.push(String(message));
+  };
+
+  try {
+    await run();
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  return warnings;
+}
+
 test("lifecycle registers --fast as a boolean startup flag", () => {
   const harness = createHarness({
     persistState: true,
@@ -246,6 +275,90 @@ test("replace footer clone installs on startup while inactive and updates active
   assert.doesNotMatch(inactiveOutput, /gpt-5\.5 fast/);
   assert.match(activeOutput, /gpt-5\.5 .*fast/);
   assert.equal(footer.renderRequests > 0, true);
+});
+
+test("session startup routes config and handoff warnings to UI once for the current operation", async () => {
+  const configWarning = {
+    code: "config-supported-models-dropped",
+    path: "/work/repo/.pi/extensions/pi-openai-fast.json",
+    message: "Dropped invalid supported model entries.",
+  };
+  const harness = createHarness(
+    {
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    },
+    { loadWarnings: [configWarning, configWarning] },
+  );
+  const { ctx, notifications } = createContext({ currentModel: model("partner", "gpt-5.5") });
+
+  await withFastDesiredHandoffEnv("maybe", async () => {
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+  });
+
+  assert.deepEqual(
+    notifications.filter(({ type }) => type === "warning").map(({ message }) => message),
+    [
+      "Dropped invalid supported model entries.",
+      'Ignoring invalid PI_OPENAI_FAST_DESIRED value "maybe"; expected exact value 1 or 0.',
+    ],
+  );
+});
+
+test("session startup routes operation warnings to console when UI notifications are unavailable", async () => {
+  const configWarning = {
+    code: "config-supported-models-not-array",
+    path: "/work/repo/.pi/extensions/pi-openai-fast.json",
+    message: "Ignored non-array supportedModels.",
+  };
+  const harness = createHarness(
+    {
+      persistState: false,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    },
+    { loadWarnings: [configWarning] },
+  );
+  const { ctx } = createContext({ hasNotify: false, currentModel: model("partner", "gpt-5.5") });
+
+  const warnings = await captureConsoleWarnings(async () => {
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+  });
+
+  assert.deepEqual(warnings, ["[pi-openai-fast] Ignored non-array supportedModels."]);
+});
+
+test("warning sink failures do not fail startup or command handling", async () => {
+  const loadWarning = {
+    code: "config-supported-models-all-invalid",
+    path: "/work/repo/.pi/extensions/pi-openai-fast.json",
+    message: "All supportedModels entries were invalid.",
+  };
+  const writeWarning = {
+    code: "config-write-failed",
+    path: "/work/repo/.pi/extensions/pi-openai-fast.json",
+    message: "Could not write Fast config.",
+  };
+  const harness = createHarness(
+    {
+      persistState: true,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    },
+    { desiredActiveWriteResult: false, loadWarnings: [loadWarning], writeWarnings: [writeWarning] },
+  );
+  const { ctx } = createContext({ notifyThrows: true, currentModel: model("partner", "gpt-5.5") });
+
+  await assert.doesNotReject(async () => {
+    await emit(harness, "session_start", { type: "session_start" }, ctx);
+  });
+  await assert.doesNotReject(async () => {
+    await harness.commands.get("fast").handler("", ctx);
+  });
 });
 
 test("same-process replacement reads valid desired handoff on before non-persistent config defaults", async () => {
@@ -939,6 +1052,59 @@ test("/fast warns when the Desired Fast State toggles but cannot be saved", asyn
   assert.deepEqual(harness.configStore.writes, [{ cwd: "/work/repo", desiredActive: true }]);
   assert.deepEqual(notifications, [{ message: FAST_COMMAND_SAVE_FAILED_MESSAGE, type: "warning" }]);
   assert.deepEqual(requestPayload, { model: "gpt-5.5", service_tier: "priority" });
+});
+
+test("/fast surfaces structured config write warnings through UI without duplicate save-failure warnings", async () => {
+  const writeWarning = {
+    code: "config-write-failed",
+    path: "/work/repo/.pi/extensions/pi-openai-fast.json",
+    message: "Could not write structured Fast config warning.",
+  };
+  const harness = createHarness(
+    {
+      persistState: true,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    },
+    { desiredActiveWriteResult: false, writeWarnings: [writeWarning, writeWarning] },
+  );
+  const { ctx, notifications } = createContext();
+
+  await harness.commands.get("fast").handler("", ctx);
+
+  assert.deepEqual(
+    notifications.filter(({ type }) => type === "warning").map(({ message }) => message),
+    ["Could not write structured Fast config warning."],
+  );
+  assert.equal(
+    notifications.some(({ message }) => message === FAST_COMMAND_SAVE_FAILED_MESSAGE),
+    false,
+  );
+});
+
+test("/fast routes structured config write warnings to console when UI notifications are unavailable", async () => {
+  const writeWarning = {
+    code: "config-malformed-write-refused",
+    path: "/work/repo/.pi/extensions/pi-openai-fast.json",
+    message: "Could not save until the config is manually repaired.",
+  };
+  const harness = createHarness(
+    {
+      persistState: true,
+      desiredActive: false,
+      supportedModels: ["partner/gpt-5.5"],
+      footer: { mode: "replace", vars: {}, darkFastColor: "#ff50be", lightFastColor: "#d20000" },
+    },
+    { desiredActiveWriteResult: false, writeWarnings: [writeWarning] },
+  );
+  const { ctx } = createContext({ hasNotify: false });
+
+  const warnings = await captureConsoleWarnings(async () => {
+    await harness.commands.get("fast").handler("", ctx);
+  });
+
+  assert.deepEqual(warnings, ["[pi-openai-fast] Could not save until the config is manually repaired."]);
 });
 
 test("status mode publishes only active fast status and never installs a custom footer", async () => {
