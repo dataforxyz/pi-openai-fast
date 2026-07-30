@@ -98,6 +98,14 @@ export interface FooterCloneSessionEntry {
   };
 }
 
+type FooterUsageTotals = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+};
+
 export interface FooterCloneOptions {
   context?: FooterCloneContext | undefined;
   getContext?: (() => FooterCloneContext | undefined) | undefined;
@@ -193,6 +201,14 @@ export class FooterClone implements Component {
   private readonly colorMode: FastColorMode;
   private readonly tui: FooterCloneTui | undefined;
   private readonly disposeCallbacks: Array<() => void> = [];
+  private usageCache:
+    | {
+        sessionManager: FooterCloneSessionManager;
+        entryCount: number;
+        lastEntry: FooterCloneSessionEntry | undefined;
+        totals: FooterUsageTotals;
+      }
+    | undefined;
   private ownedByExtension = true;
 
   constructor(options: FooterCloneOptions) {
@@ -233,6 +249,43 @@ export class FooterClone implements Component {
     return this.ownedByExtension;
   }
 
+  private cumulativeUsage(sessionManager: FooterCloneSessionManager): FooterUsageTotals {
+    const entries = sessionManager.getEntries();
+    const lastEntry = entries.at(-1);
+    const cached = this.usageCache;
+    if (
+      cached?.sessionManager === sessionManager &&
+      cached.entryCount === entries.length &&
+      cached.lastEntry === lastEntry
+    ) {
+      return cached.totals;
+    }
+
+    const totals: FooterUsageTotals = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+    };
+    for (const entry of entries) {
+      if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+      const usage = entry.message.usage;
+      totals.input += numberOrZero(usage?.input);
+      totals.output += numberOrZero(usage?.output);
+      totals.cacheRead += numberOrZero(usage?.cacheRead);
+      totals.cacheWrite += numberOrZero(usage?.cacheWrite);
+      totals.cost += numberOrZero(usage?.cost?.total);
+    }
+    this.usageCache = {
+      sessionManager,
+      entryCount: entries.length,
+      lastEntry,
+      totals,
+    };
+    return totals;
+  }
+
   dispose(): void {
     this.ownedByExtension = false;
 
@@ -254,23 +307,15 @@ export class FooterClone implements Component {
       thinkingLevel: normalizeThinkingLevel(this.getThinkingLevel()),
     };
 
-    // Calculate cumulative usage from ALL session entries (not just post-compaction messages)
-    let totalInput = 0;
-    let totalOutput = 0;
-    let totalCacheRead = 0;
-    let totalCacheWrite = 0;
-    let totalCost = 0;
-
-    for (const entry of context.sessionManager.getEntries()) {
-      if (entry.type === "message" && entry.message?.role === "assistant") {
-        const usage = entry.message.usage;
-        totalInput += numberOrZero(usage?.input);
-        totalOutput += numberOrZero(usage?.output);
-        totalCacheRead += numberOrZero(usage?.cacheRead);
-        totalCacheWrite += numberOrZero(usage?.cacheWrite);
-        totalCost += numberOrZero(usage?.cost?.total);
-      }
-    }
+    // Calculate cumulative usage from ALL session entries (not just post-compaction messages).
+    // Session entries are append-only immutable records, so repeated TUI renders can reuse the
+    // total until the manager, entry count, or final entry identity changes.
+    const usageTotals = this.cumulativeUsage(context.sessionManager);
+    const totalInput = usageTotals.input;
+    const totalOutput = usageTotals.output;
+    const totalCacheRead = usageTotals.cacheRead;
+    const totalCacheWrite = usageTotals.cacheWrite;
+    const totalCost = usageTotals.cost;
 
     // Calculate context usage from session (handles compaction correctly).
     // After compaction, tokens are unknown until the next LLM response.

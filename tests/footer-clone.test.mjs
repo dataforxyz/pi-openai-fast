@@ -167,6 +167,46 @@ test("branch change subscription is disposed when footer clone unmounts", () => 
   assert.equal(renderRequests.value, 1);
 });
 
+test("repeated renders reuse cumulative usage until session entries change", () => {
+  let inspectedEntries = 0;
+  const countedAssistantEntry = (usage) => ({
+    get type() {
+      inspectedEntries += 1;
+      return "message";
+    },
+    message: { role: "assistant", usage },
+  });
+  const entries = [
+    countedAssistantEntry({ input: 1000, output: 2000, cost: { total: 0.01 } }),
+    countedAssistantEntry({ input: 500, output: 250, cost: { total: 0.02 } }),
+  ];
+  const context = createContext({
+    sessionManager: {
+      getCwd: () => "/Users/alice/project",
+      getSessionName: () => "cache-test",
+      getEntries: () => entries,
+    },
+  });
+  const clone = createClone({ context });
+
+  const first = clone.render(120).join("\n");
+  assert.equal(inspectedEntries, 2);
+  assert.match(first, /↑1\.5k/);
+  assert.match(first, /↓2\.3k/);
+  assert.match(first, /\$0\.030/);
+
+  const second = clone.render(80).join("\n");
+  assert.equal(inspectedEntries, 2);
+  assert.match(second, /↑1\.5k/);
+
+  entries.push(countedAssistantEntry({ input: 500, output: 750, cost: { total: 0.04 } }));
+  const third = clone.render(120).join("\n");
+  assert.equal(inspectedEntries, 5);
+  assert.match(third, /↑2\.0k/);
+  assert.match(third, /↓3\.0k/);
+  assert.match(third, /\$0\.070/);
+});
+
 test("inactive clone preserves Pi default footer information without a fast label", () => {
   const originalHome = process.env.HOME;
   process.env.HOME = "/Users/alice";
