@@ -2,6 +2,14 @@ import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/p
 import type { FastLabelFormatter } from "./fast-label-formatter.ts";
 import type { FastColorMode, FastColorValue } from "./fast-colors.ts";
 import {
+  FooterUsageTracker,
+  type FooterUsage as FooterCloneUsage,
+  type FooterUsageEntry as FooterCloneSessionEntry,
+  type FooterUsageSessionManager,
+} from "./footer-usage-tracker.ts";
+
+export type { FooterCloneUsage, FooterCloneSessionEntry };
+import {
   normalizeThinkingLevel,
   renderThemeMatchedFastLabel,
   type ThinkingLevel,
@@ -58,11 +66,9 @@ export interface FooterCloneContextUsage {
   contextWindow?: number | undefined;
 }
 
-export interface FooterCloneSessionManager {
+export interface FooterCloneSessionManager extends FooterUsageSessionManager {
   getCwd(): string;
   getSessionName(): string | undefined;
-  getEntries(): readonly FooterCloneSessionEntry[];
-  getEntriesRevision?(): number;
 }
 
 export interface FooterCloneModelRegistry {
@@ -83,30 +89,6 @@ export interface FooterCloneFooterData {
   onBranchChange?: (callback: () => void) => () => void;
 }
 
-export interface FooterCloneUsage {
-  input?: number | undefined;
-  output?: number | undefined;
-  cacheRead?: number | undefined;
-  cacheWrite?: number | undefined;
-  cost?: { total?: number | undefined } | undefined;
-}
-
-export interface FooterCloneSessionEntry {
-  type: string;
-  message?: {
-    role?: string | undefined;
-    usage?: FooterCloneUsage | undefined;
-  };
-}
-
-type FooterUsageTotals = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-};
-
 export interface FooterCloneOptions {
   context?: FooterCloneContext | undefined;
   getContext?: (() => FooterCloneContext | undefined) | undefined;
@@ -115,6 +97,7 @@ export interface FooterCloneOptions {
   labelFormatter: FastLabelFormatter;
   isFastActive: () => boolean;
   getThinkingLevel: () => string | undefined;
+  usageTracker?: FooterUsageTracker | undefined;
   fastLabelColors?: {
     dark?: FastColorValue;
     light?: FastColorValue;
@@ -144,10 +127,6 @@ function formatTokens(count: number): string {
   if (count < 1000000) return `${Math.round(count / 1000)}k`;
   if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
   return `${Math.round(count / 1000000)}M`;
-}
-
-function numberOrZero(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 const ANSI_FAST_LABEL_PATTERN = /\x1b\[[0-9;]*mfast\x1b\[39m/g;
@@ -201,16 +180,8 @@ export class FooterClone implements Component {
   private readonly isThemeLight: boolean;
   private readonly colorMode: FastColorMode;
   private readonly tui: FooterCloneTui | undefined;
+  private readonly usageTracker: FooterUsageTracker;
   private readonly disposeCallbacks: Array<() => void> = [];
-  private usageCache:
-    | {
-        sessionManager: FooterCloneSessionManager;
-        entriesRevision?: number;
-        entryCount?: number;
-        lastEntry?: FooterCloneSessionEntry | undefined;
-        totals: FooterUsageTotals;
-      }
-    | undefined;
   private ownedByExtension = true;
 
   constructor(options: FooterCloneOptions) {
@@ -228,6 +199,7 @@ export class FooterClone implements Component {
     this.isThemeLight = options.theme.name?.toLowerCase() === "light";
     this.colorMode = options.theme.getColorMode?.() ?? "256color";
     this.tui = options.tui;
+    this.usageTracker = options.usageTracker ?? new FooterUsageTracker();
 
     if (typeof options.footerData.onBranchChange === "function") {
       const unsubscribe = options.footerData.onBranchChange(() => {
@@ -251,53 +223,6 @@ export class FooterClone implements Component {
     return this.ownedByExtension;
   }
 
-  private cumulativeUsage(sessionManager: FooterCloneSessionManager): FooterUsageTotals {
-    const cached = this.usageCache;
-    const revision = typeof sessionManager.getEntriesRevision === "function"
-      ? sessionManager.getEntriesRevision()
-      : undefined;
-    if (
-      revision !== undefined &&
-      cached?.sessionManager === sessionManager &&
-      cached.entriesRevision === revision
-    ) {
-      return cached.totals;
-    }
-
-    const entries = sessionManager.getEntries();
-    const lastEntry = entries.at(-1);
-    if (
-      revision === undefined &&
-      cached?.sessionManager === sessionManager &&
-      cached.entriesRevision === undefined &&
-      cached.entryCount === entries.length &&
-      cached.lastEntry === lastEntry
-    ) {
-      return cached.totals;
-    }
-
-    const totals: FooterUsageTotals = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: 0,
-    };
-    for (const entry of entries) {
-      if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-      const usage = entry.message.usage;
-      totals.input += numberOrZero(usage?.input);
-      totals.output += numberOrZero(usage?.output);
-      totals.cacheRead += numberOrZero(usage?.cacheRead);
-      totals.cacheWrite += numberOrZero(usage?.cacheWrite);
-      totals.cost += numberOrZero(usage?.cost?.total);
-    }
-    this.usageCache = revision === undefined
-      ? { sessionManager, entryCount: entries.length, lastEntry, totals }
-      : { sessionManager, entriesRevision: revision, totals };
-    return totals;
-  }
-
   dispose(): void {
     this.ownedByExtension = false;
 
@@ -319,10 +244,8 @@ export class FooterClone implements Component {
       thinkingLevel: normalizeThinkingLevel(this.getThinkingLevel()),
     };
 
-    // Calculate cumulative usage from ALL session entries (not just post-compaction messages).
-    // Session entries are append-only immutable records, so repeated TUI renders can reuse the
-    // total until the manager, entry count, or final entry identity changes.
-    const usageTotals = this.cumulativeUsage(context.sessionManager);
+    // Usage is maintained from lifecycle events outside the render path.
+    const usageTotals = this.usageTracker.snapshot(context.sessionManager).totals;
     const totalInput = usageTotals.input;
     const totalOutput = usageTotals.output;
     const totalCacheRead = usageTotals.cacheRead;
