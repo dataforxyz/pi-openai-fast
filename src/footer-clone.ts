@@ -62,6 +62,7 @@ export interface FooterCloneSessionManager {
   getCwd(): string;
   getSessionName(): string | undefined;
   getEntries(): readonly FooterCloneSessionEntry[];
+  getEntriesRevision?(): number;
 }
 
 export interface FooterCloneModelRegistry {
@@ -204,8 +205,9 @@ export class FooterClone implements Component {
   private usageCache:
     | {
         sessionManager: FooterCloneSessionManager;
-        entryCount: number;
-        lastEntry: FooterCloneSessionEntry | undefined;
+        entriesRevision?: number;
+        entryCount?: number;
+        lastEntry?: FooterCloneSessionEntry | undefined;
         totals: FooterUsageTotals;
       }
     | undefined;
@@ -250,11 +252,24 @@ export class FooterClone implements Component {
   }
 
   private cumulativeUsage(sessionManager: FooterCloneSessionManager): FooterUsageTotals {
+    const cached = this.usageCache;
+    const revision = typeof sessionManager.getEntriesRevision === "function"
+      ? sessionManager.getEntriesRevision()
+      : undefined;
+    if (
+      revision !== undefined &&
+      cached?.sessionManager === sessionManager &&
+      cached.entriesRevision === revision
+    ) {
+      return cached.totals;
+    }
+
     const entries = sessionManager.getEntries();
     const lastEntry = entries.at(-1);
-    const cached = this.usageCache;
     if (
+      revision === undefined &&
       cached?.sessionManager === sessionManager &&
+      cached.entriesRevision === undefined &&
       cached.entryCount === entries.length &&
       cached.lastEntry === lastEntry
     ) {
@@ -277,12 +292,9 @@ export class FooterClone implements Component {
       totals.cacheWrite += numberOrZero(usage?.cacheWrite);
       totals.cost += numberOrZero(usage?.cost?.total);
     }
-    this.usageCache = {
-      sessionManager,
-      entryCount: entries.length,
-      lastEntry,
-      totals,
-    };
+    this.usageCache = revision === undefined
+      ? { sessionManager, entryCount: entries.length, lastEntry, totals }
+      : { sessionManager, entriesRevision: revision, totals };
     return totals;
   }
 
