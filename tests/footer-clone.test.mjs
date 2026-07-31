@@ -167,8 +167,9 @@ test("branch change subscription is disposed when footer clone unmounts", () => 
   assert.equal(renderRequests.value, 1);
 });
 
-test("repeated renders reuse cumulative usage until session entries change", () => {
+test("legacy hosts retain entry-count and final-entry cache behavior", () => {
   let inspectedEntries = 0;
+  let getEntriesCalls = 0;
   const countedAssistantEntry = (usage) => ({
     get type() {
       inspectedEntries += 1;
@@ -184,27 +185,92 @@ test("repeated renders reuse cumulative usage until session entries change", () 
     sessionManager: {
       getCwd: () => "/Users/alice/project",
       getSessionName: () => "cache-test",
-      getEntries: () => entries,
+      getEntries: () => {
+        getEntriesCalls += 1;
+        return entries;
+      },
     },
   });
   const clone = createClone({ context });
 
   const first = clone.render(120).join("\n");
+  assert.equal(getEntriesCalls, 1);
   assert.equal(inspectedEntries, 2);
   assert.match(first, /↑1\.5k/);
   assert.match(first, /↓2\.3k/);
   assert.match(first, /\$0\.030/);
 
   const second = clone.render(80).join("\n");
+  assert.equal(getEntriesCalls, 2);
   assert.equal(inspectedEntries, 2);
   assert.match(second, /↑1\.5k/);
 
   entries.push(countedAssistantEntry({ input: 500, output: 750, cost: { total: 0.04 } }));
   const third = clone.render(120).join("\n");
+  assert.equal(getEntriesCalls, 3);
   assert.equal(inspectedEntries, 5);
   assert.match(third, /↑2\.0k/);
   assert.match(third, /↓3\.0k/);
   assert.match(third, /\$0\.070/);
+});
+
+test("entry revisions avoid getEntries allocation on unchanged renders and invalidate on change", () => {
+  let revision = 1;
+  let getEntriesCalls = 0;
+  const entries = [assistantEntry({ input: 1000, output: 2000, cost: { total: 0.01 } })];
+  const sessionManager = {
+    getCwd: () => "/Users/alice/project",
+    getSessionName: () => "revision-cache-test",
+    getEntriesRevision: () => revision,
+    getEntries: () => {
+      getEntriesCalls += 1;
+      return entries;
+    },
+  };
+  const clone = createClone({ context: createContext({ sessionManager }) });
+
+  for (let index = 0; index < 500; index += 1) clone.render(120);
+  assert.equal(getEntriesCalls, 1);
+
+  entries.push(assistantEntry({ input: 500, output: 250, cost: { total: 0.02 } }));
+  revision += 1;
+  const changed = clone.render(120).join("\n");
+  assert.equal(getEntriesCalls, 2);
+  assert.match(changed, /↑1\.5k/);
+  assert.match(changed, /↓2\.3k/);
+  assert.match(changed, /\$0\.030/);
+});
+
+test("entry revision cache remains scoped to the session manager identity", () => {
+  let firstCalls = 0;
+  let secondCalls = 0;
+  const manager = (input, count) => ({
+    getCwd: () => "/Users/alice/project",
+    getSessionName: () => "manager-identity-test",
+    getEntriesRevision: () => 1,
+    getEntries: () => {
+      count.value += 1;
+      return [assistantEntry(input)];
+    },
+  });
+  const firstCount = { get value() { return firstCalls; }, set value(value) { firstCalls = value; } };
+  const secondCount = { get value() { return secondCalls; }, set value(value) { secondCalls = value; } };
+  let context = createContext({ sessionManager: manager({ input: 1000 }, firstCount) });
+  const clone = new FooterClone({
+    getContext: () => context,
+    footerData: createFooterData(),
+    theme: createTheme(),
+    labelFormatter: new FastLabelFormatter(),
+    isFastActive: () => false,
+    getThinkingLevel: () => "xhigh",
+  });
+
+  clone.render(120);
+  context = createContext({ sessionManager: manager({ input: 2000 }, secondCount) });
+  const second = clone.render(120).join("\n");
+  assert.equal(firstCalls, 1);
+  assert.equal(secondCalls, 1);
+  assert.match(second, /↑2\.0k/);
 });
 
 test("inactive clone preserves Pi default footer information without a fast label", () => {
