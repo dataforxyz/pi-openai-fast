@@ -58,16 +58,25 @@ Fast Mode is currently supported by these Pi model keys:
   "openai/gpt-5.6-sol",
   "openai/gpt-5.6-terra",
   "openai/gpt-5.6-luna",
+  "openai/gpt-6-luna",
+  "openai/gpt-6-astra",
+  "openai/gpt-6-sol",
   "openai-codex/gpt-5.4",
   "openai-codex/gpt-5.5",
   "openai-codex/gpt-5.6-sol",
   "openai-codex/gpt-5.6-terra",
   "openai-codex/gpt-5.6-luna",
+  "openai-codex/gpt-6-luna",
+  "openai-codex/gpt-6-astra",
+  "openai-codex/gpt-6-sol",
   "codex/gpt-5.4",
   "codex/gpt-5.5",
   "codex/gpt-5.6-sol",
   "codex/gpt-5.6-terra",
-  "codex/gpt-5.6-luna"
+  "codex/gpt-5.6-luna",
+  "codex/gpt-6-luna",
+  "codex/gpt-6-astra",
+  "codex/gpt-6-sol"
 ]
 ```
 
@@ -94,16 +103,25 @@ Example config:
     "openai/gpt-5.6-sol",
     "openai/gpt-5.6-terra",
     "openai/gpt-5.6-luna",
+    "openai/gpt-6-luna",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-sol",
     "openai-codex/gpt-5.4",
     "openai-codex/gpt-5.5",
     "openai-codex/gpt-5.6-sol",
     "openai-codex/gpt-5.6-terra",
     "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-6-luna",
+    "openai-codex/gpt-6-astra",
+    "openai-codex/gpt-6-sol",
     "codex/gpt-5.4",
     "codex/gpt-5.5",
     "codex/gpt-5.6-sol",
     "codex/gpt-5.6-terra",
-    "codex/gpt-5.6-luna"
+    "codex/gpt-5.6-luna",
+    "codex/gpt-6-luna",
+    "codex/gpt-6-astra",
+    "codex/gpt-6-sol"
   ],
   "footer": {
     "mode": "replace"
